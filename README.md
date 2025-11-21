@@ -1,34 +1,36 @@
+**Language**: [English](README.md) | [简体中文](README.zh-CN.md)
+
 # MotrixLab
 
 ![GitHub License](https://img.shields.io/github/license/Motphys/MotrixLab)
 ![Python Version](https://img.shields.io/badge/python-3.10-blue)
 
-`MotrixLab` 是一个基于 [MotrixSim](https://github.com/Motphys/motrixsim-docs) 仿真引擎的强化学习框架，专为机器人仿真和训练设计。该项目提供了一个完整的强化学习开发平台，集成了多种仿真环境和训练框架。
+`MotrixLab` is a reinforcement learning framework based on the [MotrixSim](https://github.com/Motphys/motrixsim-docs) simulation engine, designed specifically for robot simulation and training. This project provides a complete reinforcement learning development platform that integrates multiple simulation environments and training frameworks.
 
-## 项目概述
+## Project Overview
 
-该项目分为两个核心部分：
+The project is divided into two core components:
 
--   **motrix_envs**: 基于 MotrixSim 构建的各种 RL 仿真环境，定义了 observation、action、reward。与具体的 RL 框架无关，目前支持 MotrixSim 的 CPU 后端
--   **motrix_rl**: 集成 RL 框架，并使用 motrix_envs 里的各种环境参数进行训练。目前支持 SKRL 框架的 PPO 算法
+-   **motrix_envs**: Various RL simulation environments built on MotrixSim, defining observation, action, and reward. Framework-agnostic and currently supports MotrixSim's CPU backend
+-   **motrix_rl**: Integrates RL frameworks and uses various environment parameters from motrix_envs for training. Currently supports SKRL framework's PPO algorithm
 
-> 文档地址：https://motrixlab.readthedocs.io
+> Documentation: https://motrixlab.readthedocs.io
 
-## 主要特性
+## Key Features
 
--   **统一接口**: 提供简洁统一的强化学习训练和评估接口
--   **多后端支持**: 支持 JAX 和 PyTorch 训练后端，可根据硬件环境灵活选择
--   **丰富环境**: 包含基础控制、运动、操作等多种机器人仿真环境
--   **高性能仿真**: 基于 MotrixSim 的高性能物理仿真引擎
--   **可视化训练**: 支持实时渲染和训练过程可视化
+-   **Unified Interface**: Provides a concise and unified reinforcement learning training and evaluation interface
+-   **Multi-backend Support**: Supports JAX and PyTorch training backends, with flexible selection based on hardware environment
+-   **Rich Environments**: Includes various robot simulation environments such as basic control, locomotion, and manipulation tasks
+-   **High-performance Simulation**: Built on MotrixSim's high-performance physics simulation engine
+-   **Visual Training**: Supports real-time rendering and training process visualization
 
-## 🚀 快速开始
+## 🚀 Quick Start
 
-> 以下示例使用了 Python 项目管理工具：[UV](https://docs.astral.sh/uv/)
+> The following examples use the Python project management tool: [UV](https://docs.astral.sh/uv/)
 >
-> 在开始之前，请先[安装](https://docs.astral.sh/uv/getting-started/installation/)该工具。
+> Before starting, please [install](https://docs.astral.sh/uv/getting-started/installation/) this tool.
 
-### 克隆仓库
+### Clone Repository
 
 ```bash
 git clone https://github.com/Motphys/MotrixLab
@@ -38,63 +40,63 @@ cd MotrixLab
 git lfs pull
 ```
 
-### 安装依赖
+### Install Dependencies
 
-安装全部依赖：
+Install all dependencies:
 
 ```bash
 uv sync --all-packages --all-extras
 ```
 
-SKRL 框架支持 JAX(Flax)或 PyTorch 作为训练后端，您也可以根据自己的设备环境，选择只安装其中一种训练后端：
+SKRL framework supports JAX(Flax) or PyTorch as training backends. You can also choose to install only one training backend based on your hardware environment:
 
-安装 JAX 作为训练后端（仅支持 Linux 平台）：
+Install JAX as training backend (Linux only):
 
 ```bash
 uv sync --all-packages --extra skrl-jax
 ```
 
-安装 PyTorch 作为训练后端：
+Install PyTorch as training backend:
 
 ```bash
 uv sync --all-packages --extra skrl-torch
 ```
 
-## 🎯 使用指南
+## 🎯 Usage Guide
 
-### 环境可视化
+### Environment Visualization
 
-查看环境而不执行训练：
+View environments without executing training:
 
 ```bash
 uv run scripts/view.py --env cartpole
 ```
 
-### 训练模型
+### Model Training
 
 ```bash
 uv run scripts/train.py --env cartpole
 ```
 
-训练结果会保存在 `runs/{env-name}/` 目录下。
+Training results are saved in the `runs/{env-name}/` directory.
 
-通过 TensorBoard 查看训练数据：
+View training data through TensorBoard:
 
 ```bash
 uv run tensorboard --logdir runs/{env-name}
 ```
 
-### 模型推理
+### Model Inference
 
-```
+```bash
 uv run scripts/play.py --env cartpole
 ```
 
-更多使用方式请参考[用户文档](https://motrixlab.readthedocs.io)
+For more usage methods, please refer to the [User Documentation](https://motrixlab.readthedocs.io)
 
-## 📬 联系方式
+## 📬 Contact
 
-有问题或建议？欢迎通过以下方式联系我们：
+Have questions or suggestions? Feel free to contact us through:
 
--   GitHub Issues: [提交问题](https://github.com/Motphys/MotrixLab/issues)
--   Discussions: [加入讨论](https://github.com/Motphys/MotrixLab/discussions)
+-   GitHub Issues: [Submit Issues](https://github.com/Motphys/MotrixLab/issues)
+-   Discussions: [Join Discussion](https://github.com/Motphys/MotrixLab/discussions)
