@@ -37,6 +37,7 @@ def generate_repeating_array(num_period, num_reset, period_counter):
     return np.array(idx)
 
 
+@registry.env("vbot_navigation_section001", "np")
 class VBotSection001Env(NpEnv):
     """
     VBot在Section001地形上的导航任务
@@ -149,6 +150,12 @@ class VBotSection001Env(NpEnv):
             if geom_name is not None and ground_prefix in geom_name:
                 ground_geoms.append(self._model.get_geom_index(geom_name))
         
+        # if len(ground_geoms) == 0:
+        #     print(f"[Warning] 未找到以 '{ground_prefix}' 开头的地面geom！")
+        #     self.termination_contact = np.zeros((0, 2), dtype=np.uint32)
+        #     self.num_termination_check = 0
+        #     return
+        
         # 构建碰撞对：每个基座geom × 每个地面geom
         termination_contact_list = []
         for base_geom_name in termination_contact_names:
@@ -162,9 +169,11 @@ class VBotSection001Env(NpEnv):
         if len(termination_contact_list) > 0:
             self.termination_contact = np.array(termination_contact_list, dtype=np.uint32)
             self.num_termination_check = len(termination_contact_list)
+            print(f"[Info] 初始化终止接触检测: {len(termination_contact_names)}个基座geom × {len(ground_geoms)}个地面geom = {self.num_termination_check}个检测对")
         else:
             self.termination_contact = np.zeros((0, 2), dtype=np.uint32)
             self.num_termination_check = 0
+            print("[Warning] 未找到任何终止接触geom，基座接触检测将被禁用！")
     
     def _init_foot_contact(self):
         self.foot_contact_check = np.zeros((0, 2), dtype=np.uint32)
@@ -478,12 +487,12 @@ class VBotSection001Env(NpEnv):
         cfg = self._cfg
         
         # 计算总奖励
-        reward = np.zeros(self._num_envs, dtype=np.float32)
+        reward = np.array([0])
         
         return reward
 
     def reset(self, data: mtx.SceneData, done: np.ndarray = None) -> tuple[np.ndarray, dict]:
-        cfg: VBotSection001EnvCfg = self._cfg
+        cfg: VBotSection01EnvCfg = self._cfg
         num_envs = data.shape[0]
         
         # 在高台中央小范围内随机生成位置
@@ -650,6 +659,7 @@ class VBotSection001Env(NpEnv):
             ],
             axis=-1,
         )
+        print(f"obs.shape:{obs.shape}")
         assert obs.shape == (num_envs, 54)  # 54 + 1 = 55维
         
         info = {
@@ -666,3 +676,4 @@ class VBotSection001Env(NpEnv):
         }
         
         return obs, info
+    
