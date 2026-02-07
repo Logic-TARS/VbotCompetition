@@ -85,13 +85,6 @@ class VBotSection001Env(NpEnv):
         
         # 初始化缓存
         self._init_buffer()
-        
-        # 初始位置生成参数：从配置文件读取
-        self.spawn_center = np.array(cfg.init_state.pos, dtype=np.float32)  # 从配置读取
-        self.spawn_range = 0.1  # 随机生成范围：±0.1m（0.2m×0.2m区域）
-    
-        # 导航统计计数器
-        self.navigation_stats_step = 0
     
     def _init_buffer(self):
         """初始化缓存和参数"""
@@ -112,6 +105,7 @@ class VBotSection001Env(NpEnv):
         
         self._init_dof_pos[-self._num_action:] = self.default_angles
         self.action_filter_alpha = 0.3
+
     
     def _find_target_marker_dof_indices(self):
         """查找target_marker在dof_pos中的索引位置"""
@@ -480,55 +474,215 @@ class VBotSection001Env(NpEnv):
         
         return state.replace(terminated=terminated)
     
+    def _detect_fall(self, root_quat: np.ndarray, foot_contacts: np.ndarray) -> np.ndarray:
+        """
+        检测机器狗是否摔倒
+        
+        返回：摔倒标志数组 [num_envs]
+        """
+        # 从四元数计算 Roll 和 Pitch
+        qx, qy, qz, qw = root_quat[:, 0], root_quat[:, 1], root_quat[:, 2], root_quat[:, 3]
+        
+        # Roll (绕X轴旋转)
+        sinr_cosp = 2 * (qw * qx + qy * qz)
+        cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
+        roll = np.arctan2(sinr_cosp, cosr_cosp)
+        
+        # Pitch (绕Y轴旋转)
+        sinp = 2 * (qw * qy - qz * qx)
+        sinp = np.clip(sinp, -1.0, 1.0)
+        pitch = np.arcsin(sinp)
+        
+        # 判定摔倒：Roll或Pitch超过阈值，或足部接触过低（长时间悬空）
+        exceeded_angle = (np.abs(roll) > self.fall_threshold_roll_pitch) | (np.abs(pitch) > self.fall_threshold_roll_pitch)
+        
+        # 更新连续悬空帧数
+        if foot_contacts.ndim > 1 and foot_contacts.shape[0] == self._num_envs:
+            # 正确维度: [num_envs, 4]
+            all_feet_low_contact = np.all(foot_contacts < self.fall_contact_threshold, axis=1)
+            self.dog_fall_frames = np.where(all_feet_low_contact, self.dog_fall_frames + 1, 0)
+        else:
+            # 传感器维度不匹配，保守假设没有摔倒
+            self.dog_fall_frames = np.zeros(self._num_envs, dtype=np.int32)
+            all_feet_low_contact = False
+        
+        long_time_airborne = self.dog_fall_frames > self.fall_frames_threshold
+        
+        return exceeded_angle | long_time_airborne
+    
+    def _detect_out_of_bounds(self, robot_pos: np.ndarray) -> np.ndarray:
+        """
+        检测机器狗是否越界
+        
+        返回：越界标志数组 [num_envs]
+        """
+        # 计算机器狗到圆心的距离
+        delta = robot_pos[:, :2] - self.arena_center
+        distance_from_center = np.linalg.norm(delta, axis=1)
+        
+        # 越界条件：距离超过边界半径
+        return distance_from_center > self.boundary_radius
+    
+    def _check_trigger_points(self, robot_pos: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        检测机器狗是否触发触发点 A（内圈）和 B（圆心）
+        
+        返回：(触发点A, 触发点B) 布尔数组
+        """
+        trigger_threshold = 0.3  # 触发半径 0.3 米
+        
+        # 到触发点A的距离
+        dist_to_a = np.linalg.norm(robot_pos[:, :2] - self.target_point_a, axis=1)
+        triggered_a = dist_to_a < trigger_threshold
+        
+        # 到触发点B（圆心）的距离
+        dist_to_b = np.linalg.norm(robot_pos[:, :2] - self.target_point_b, axis=1)
+        triggered_b = dist_to_b < trigger_threshold
+        
+        return triggered_a, triggered_b
+    
+    def _update_dog_scores(self, robot_pos: np.ndarray, root_quat: np.ndarray, foot_contacts: np.ndarray):
+        """
+        更新每只机器狗的计分和状态
+        
+        参数：
+        - robot_pos: 机器狗的XYZ位置 [num_envs, 3]
+        - root_quat: 根节点四元数 [num_envs, 4]
+        - foot_contacts: 足部接触值 [num_envs, 4]
+        """
+        # 检测摔倒
+        fallen = self._detect_fall(root_quat, foot_contacts)
+        
+        # 检测越界
+        out_of_bounds = self._detect_out_of_bounds(robot_pos)
+        
+        # 检测触发点
+        triggered_a, triggered_b = self._check_trigger_points(robot_pos)
+        
+        # 更新得分和状态
+        for i in range(self._num_envs):
+            # 检查是否受到惩罚
+            if fallen[i] or out_of_bounds[i]:
+                self.dog_penalty_flags[i] = True
+                self.dog_scores[i] = 0.0
+                self.dog_stage[i] = 0
+                continue
+            
+            # 如果已受惩罚，不再计分
+            if self.dog_penalty_flags[i]:
+                continue
+            
+            # 更新阶段和计分
+            # 阶段 0 -> 1：到达内圈（+1 分）
+            if self.dog_stage[i] == 0 and triggered_a[i]:
+                self.dog_stage[i] = 1
+                self.dog_triggered_a[i] = True
+                self.dog_scores[i] += 1.0
+            
+            # 阶段 1 -> 2：到达圆心（+1 分）
+            if self.dog_stage[i] == 1 and triggered_b[i]:
+                self.dog_stage[i] = 2
+                self.dog_triggered_b[i] = True
+                self.dog_scores[i] += 1.0
+
+        
+        # 检测越界
+        out_of_bounds = self._detect_out_of_bounds(robot_pos)
+        
+        # 检测触发点
+        triggered_a, triggered_b = self._check_trigger_points(robot_pos)
+        
+        # 更新得分和状态
+        for i in range(self._num_envs):
+            # 检查是否受到惩罚
+            if fallen[i] or out_of_bounds[i]:
+                self.dog_penalty_flags[i] = True
+                self.dog_scores[i] = 0.0
+                self.dog_stage[i] = 0
+                continue
+            
+            # 如果已受惩罚，不再计分
+            if self.dog_penalty_flags[i]:
+                continue
+            
+            # 更新阶段和计分
+            # 阶段 0 -> 1：到达内圈（+1 分）
+            if self.dog_stage[i] == 0 and triggered_a[i]:
+                self.dog_stage[i] = 1
+                self.dog_triggered_a[i] = True
+                self.dog_scores[i] += 1.0
+            
+            # 阶段 1 -> 2：到达圆心（+1 分）
+            if self.dog_stage[i] == 1 and triggered_b[i]:
+                self.dog_stage[i] = 2
+                self.dog_triggered_b[i] = True
+                self.dog_scores[i] += 1.0
+
     def _compute_reward(self, data: mtx.SceneData, info: dict, velocity_commands: np.ndarray) -> np.ndarray:
         """
-        导航任务奖励计算
+        导航任务奖励计算 - 标准导航模式（采用AnymalC方式）
         """
-        cfg = self._cfg
+        # 获取机器狗位置和朝向
+        root_pos, root_quat, root_vel = self._extract_root_state(data)
         
-        # 计算总奖励
-        reward = np.array([0])
+        # 线速度追踪奖励
+        base_lin_vel = self._model.get_sensor_value(self._cfg.sensor.base_linvel, data)
+        lin_vel_error = np.sum(np.square(velocity_commands[:, :2] - base_lin_vel[:, :2]), axis=1)
+        tracking_lin_vel = np.exp(-lin_vel_error / 0.25)
+        
+        # 角速度追踪奖励
+        gyro = self._model.get_sensor_value(self._cfg.sensor.base_gyro, data)
+        ang_vel_error = np.square(velocity_commands[:, 2] - gyro[:, 2])
+        tracking_ang_vel = np.exp(-ang_vel_error / 0.25)
+        
+        # 朝向稳定性奖励
+        projected_gravity = self._compute_projected_gravity(root_quat)
+        orientation_penalty = (
+            np.square(projected_gravity[:, 0])
+            + np.square(projected_gravity[:, 1])
+        )
+        
+        # 关节速度惩罚
+        joint_vel = self.get_dof_vel(data)
+        dof_vel_penalty = np.sum(np.square(joint_vel), axis=1)
+        
+        # 力矩惩罚
+        torque_penalty = np.sum(np.square(data.actuator_ctrls), axis=1)
+        
+        # 动作变化惩罚
+        action_diff = info["current_actions"] - info["last_actions"]
+        action_rate_penalty = np.sum(np.square(action_diff), axis=1)
+        
+        # 组合奖励
+        reward = (
+            1.5 * tracking_lin_vel
+            + 0.3 * tracking_ang_vel
+            - 0.1 * orientation_penalty
+            - 0.00001 * torque_penalty
+            - 0.0 * dof_vel_penalty
+            - 0.001 * action_rate_penalty
+        )
         
         return reward
 
+
     def reset(self, data: mtx.SceneData, done: np.ndarray = None) -> tuple[np.ndarray, dict]:
-        cfg: VBotSection01EnvCfg = self._cfg
+        cfg: VBotSection001EnvCfg = self._cfg
         num_envs = data.shape[0]
         
-        # 在高台中央小范围内随机生成位置
-        # X, Y: 在spawn_center周围 ±spawn_range 范围内随机
-        random_xy = np.random.uniform(
-            low=-self.spawn_range,
-            high=self.spawn_range,
-            size=(num_envs, 2)
-        )
-        robot_init_xy = self.spawn_center[:2] + random_xy  # [num_envs, 2]
-        terrain_heights = np.full(num_envs, self.spawn_center[2], dtype=np.float32)  # 使用配置的高度
-        
-        
-        # 组合XYZ坐标
-        robot_init_pos = robot_init_xy  # [num_envs, 2]
-        robot_init_xyz = np.column_stack([robot_init_xy, terrain_heights])  # [num_envs, 3]
+        # ===== 采用 AnymalC 方式：使用固定初始位置 =====
+        # 所有环境使用相同的起始位置（从配置读取）
+        robot_init_pos = np.tile(cfg.init_state.pos, (num_envs, 1))
         
         dof_pos = np.tile(self._init_dof_pos, (num_envs, 1))
         dof_vel = np.tile(self._init_dof_vel, (num_envs, 1))
         
         # 设置 base 的 XYZ位置（DOF 3-5）
-        dof_pos[:, 3:6] = robot_init_xyz  # [x, y, z] 随机生成的位置
+        dof_pos[:, 3:6] = robot_init_pos
         
-        target_offset = np.random.uniform(
-            low=cfg.commands.pose_command_range[:2],
-            high=cfg.commands.pose_command_range[3:5],
-            size=(num_envs, 2)
-        )
-        target_positions = robot_init_pos + target_offset
-        
-        target_headings = np.random.uniform(
-            low=cfg.commands.pose_command_range[2],
-            high=cfg.commands.pose_command_range[5],
-            size=(num_envs, 1)
-        )
-        
+        # 标准目标位置设定
+        target_positions = np.tile(cfg.init_state.pos[:2], (num_envs, 1))
+        target_headings = np.zeros((num_envs, 1), dtype=np.float32)
         pose_commands = np.concatenate([target_positions, target_headings], axis=1)
         
         # 归一化base的四元数（DOF 6-9）
@@ -660,20 +814,17 @@ class VBotSection001Env(NpEnv):
             axis=-1,
         )
         print(f"obs.shape:{obs.shape}")
-        assert obs.shape == (num_envs, 54)  # 54 + 1 = 55维
+        assert obs.shape == (num_envs, 54)  # 54维
         
         info = {
             "pose_commands": pose_commands,
             "last_actions": np.zeros((num_envs, self._num_action), dtype=np.float32),
-            "steps": np.zeros(num_envs, dtype=np.int32),
             "current_actions": np.zeros((num_envs, self._num_action), dtype=np.float32),
             "filtered_actions": np.zeros((num_envs, self._num_action), dtype=np.float32),
             "ever_reached": np.zeros(num_envs, dtype=bool),
-            "min_distance": distance_to_target.copy(),  # 统一使用min_distance机制
-            # 新增：与locomotion一致的字段
-            "last_dof_vel": np.zeros((num_envs, self._num_action), dtype=np.float32),  # 上一步关节速度
-            "contacts": np.zeros((num_envs, self.num_foot_check), dtype=np.bool_),  # 足部接触状态
+            "min_distance": distance_to_target.copy(),
         }
         
         return obs, info
+
     
