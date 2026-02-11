@@ -368,7 +368,7 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
     arena_inner_radius: float = 1.5  # 内圈半径
     boundary_radius: float = 3.5  # 物理边界半径
     arena_center: list = field(default_factory=lambda: [0.0, 0.0])  # 圆心坐标
-    target_point_a: list = field(default_factory=lambda: [0.0, 1.5])  # 内圈触发点（+1分）
+    target_point_a: list = field(default_factory=lambda: [0.0, 0.0])  # 内圈触发点（+1分）
     target_point_b: list = field(default_factory=lambda: [0.0, 0.0])  # 圆心（+1分）
 
     @dataclass
