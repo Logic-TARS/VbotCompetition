@@ -766,9 +766,20 @@ class VBotSection001Env(NpEnv):
         cfg: VBotSection001EnvCfg = self._cfg
         num_envs = data.shape[0]
         
-        # ===== 采用 AnymalC 方式：使用固定初始位置 =====
-        # 所有环境使用相同的起始位置(从配置读取)
-        robot_init_pos = np.tile(cfg.init_state.pos, (num_envs, 1))
+        # ===== 极坐标随机生成在外圈 =====
+        # 每只机器狗在外圈随机分布（半径 3.0 ± 0.1m）
+        robot_init_xy = np.zeros((num_envs, 2), dtype=np.float32)
+        for i in range(num_envs):
+            theta = np.random.uniform(0, 2 * np.pi)
+            radius = cfg.arena_outer_radius + np.random.uniform(-0.1, 0.1)
+            robot_init_xy[i, 0] = radius * np.cos(theta)
+            robot_init_xy[i, 1] = radius * np.sin(theta)
+        
+        # 添加圆心偏移（如果存在）
+        robot_init_xy += np.array(cfg.arena_center, dtype=np.float32)
+        
+        # 构造完整的XYZ位置（高度固定为0.5m）
+        robot_init_pos = np.column_stack([robot_init_xy, np.full(num_envs, 0.5, dtype=np.float32)])
         
         dof_pos = np.tile(self._init_dof_pos, (num_envs, 1))
         dof_vel = np.tile(self._init_dof_vel, (num_envs, 1))

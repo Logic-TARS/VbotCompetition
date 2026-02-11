@@ -363,6 +363,12 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
     max_episode_seconds: float = 40.0
     max_episode_steps: int = 2000  # 40s × 50Hz = 2000步 ✅
     
+    # 竞技场参数
+    arena_outer_radius: float = 3.0  # 外圈半径
+    arena_inner_radius: float = 1.5  # 内圈半径
+    boundary_radius: float = 3.5  # 物理边界半径
+    arena_center: list = field(default_factory=lambda: [0.0, 0.0])  # 圆心坐标
+    
     @dataclass
     class InitState:
         # pos = [0.0, -2.4, 0.5]  # 原始起点 (距离目标6m)
