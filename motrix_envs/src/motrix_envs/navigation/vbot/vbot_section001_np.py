@@ -667,8 +667,11 @@ class VBotSection001Env(NpEnv):
 
     def _compute_reward(self, data: mtx.SceneData, info: dict, velocity_commands: np.ndarray) -> np.ndarray:
         """
-        改进的导航任务奖励 - 混合密集/稀疏奖励
+        改进的导航任务奖励 - 混合密集/稀疏奖励，增加鲁棒性奖励
         """
+        cfg = self._cfg
+        reward_scales = cfg.reward_config.scales
+        
         # ===== 1. 获取状态 =====
         root_pos, root_quat, root_vel = self._extract_root_state(data)
         base_lin_vel = self._model.get_sensor_value(self._cfg.sensor.base_linvel, data)
@@ -717,27 +720,60 @@ class VBotSection001Env(NpEnv):
         arrival_bonus = np.where(reached & (~ever_reached), 10.0, 0.0)
         info["ever_reached"] = ever_reached | reached
 
-        # ===== 5. 速度/姿态惩罚 (Penalty Only) =====
-        # 移除正向速度奖励，只保留惩罚
-        # 仅当速度*误差*很大时才扣分，而非给分
-
+        # ===== 5. 速度/姿态惩罚 (使用配置的权重) =====
         # 速度跟踪奖励
         lin_vel_error = np.sum(np.square(velocity_commands[:, :2] - base_lin_vel[:, :2]), axis=1)
         tracking_lin_vel = np.exp(-lin_vel_error / 0.25)
         velocity_reward = self.velocity_reward_weight * tracking_lin_vel
 
-        # 姿态稳定性 (Orientation Penalty)
+        # 姿态稳定性 (Orientation Penalty) - 使用配置权重
         projected_gravity = self._compute_projected_gravity(root_quat)
         # xy分量：对应roll/pitch的倾斜
-        orientation_penalty = np.sum(np.square(projected_gravity[:, :2]), axis=1) * 0.1
+        orientation_penalty = np.sum(np.square(projected_gravity[:, :2]), axis=1)
 
-        # 动作平滑惩罚
-        action_rate_penalty = np.sum(np.square(info["current_actions"] - info["last_actions"]), axis=1) * 0.005
+        # ===== 6. 新增：鲁棒性奖励 =====
+        
+        # Z轴线速度惩罚 (垂直运动)
+        lin_vel_z_penalty = np.square(root_vel[:, 2])
+        
+        # XY角速度惩罚 (横滚/俯仰角速度)
+        ang_vel_xy_penalty = np.sum(np.square(gyro[:, :2]), axis=1)
+        
+        # 足部接触稳定性奖励
+        try:
+            # 尝试获取足部接触力传感器数据
+            foot_contact_forces = []
+            for foot_name in self._cfg.sensor.feet:
+                try:
+                    contact_force = self._model.get_sensor_value(foot_name, data)
+                    if contact_force.ndim == 1:
+                        contact_force = contact_force[:, np.newaxis]
+                    foot_contact_forces.append(contact_force)
+                except Exception:
+                    # 如果传感器不存在，使用零值
+                    foot_contact_forces.append(np.zeros((num_envs, 1), dtype=np.float32))
+            
+            if len(foot_contact_forces) == 4:
+                foot_contacts = np.concatenate(foot_contact_forces, axis=1)  # [num_envs, 4]
+                # 至少2只脚接触地面视为稳定
+                stable_contacts = np.sum(foot_contacts > 0.1, axis=1) >= 2
+                contact_stability_reward = stable_contacts.astype(np.float32)
+            else:
+                contact_stability_reward = np.zeros(num_envs, dtype=np.float32)
+        except Exception:
+            # 如果获取足部接触失败，使用零奖励
+            contact_stability_reward = np.zeros(num_envs, dtype=np.float32)
+        
+        # 动作平滑性奖励（惩罚大幅度的动作变化）
+        action_diff = np.mean(np.abs(info["current_actions"] - info["last_actions"]), axis=1)
+        
+        # 动作平滑惩罚 (原有的，保持兼容)
+        action_rate_penalty = np.sum(np.square(info["current_actions"] - info["last_actions"]), axis=1)
 
         # 能量惩罚
-        torque_penalty = np.sum(np.square(data.actuator_ctrls), axis=1) * 0.00002
+        torque_penalty = np.sum(np.square(data.actuator_ctrls), axis=1)
 
-        # ===== 6. 组合奖励 =====
+        # ===== 7. 组合奖励（使用配置权重）=====
         # 目标: 如果完美运行，Total = ~9 (Progress) + 10 (Arrival) - minimal_penalty ~= 19.0
         # 范围: 0 ~ 20.0 (理想状态)
 
@@ -745,14 +781,17 @@ class VBotSection001Env(NpEnv):
             progress_reward             # 距离势能
             + arrival_bonus             # 到达奖励
             + velocity_reward           # 速度跟踪
-            - orientation_penalty       # 姿态惩罚
-            - action_rate_penalty       # 动作平滑
-            - torque_penalty            # 能量效率
+            + orientation_penalty * reward_scales.get("orientation", -0.20)  # 姿态稳定（负权重）
+            + lin_vel_z_penalty * reward_scales.get("lin_vel_z", -0.30)  # Z轴速度惩罚
+            + ang_vel_xy_penalty * reward_scales.get("ang_vel_xy", -0.15)  # XY角速度惩罚
+            + contact_stability_reward * reward_scales.get("contact_stability", 0.1)  # 接触稳定性
+            + action_diff * reward_scales.get("action_smoothness", -0.01)  # 动作平滑性
+            + action_rate_penalty * reward_scales.get("action_rate", -0.005)  # 动作变化率
+            + torque_penalty * reward_scales.get("torques", -0.00002)  # 能量效率
         )
 
-        # ===== 7. 失败惩罚 (Terminal Penalty) =====
+        # ===== 8. 失败惩罚 (Terminal Penalty) =====
         # 如果当前步触发了 terminated（意味着摔倒），给予一次性惩罚
-        # 注意：这里需要再次调用 terminated 计算逻辑，或者假设外部会处理
         # 简单起见，如果 orientation_penalty 极大 (>0.5 对应倾斜 >~45度)，给额外惩罚
         reward = np.where(orientation_penalty > 0.5, reward - 10.0, reward)
 
@@ -784,7 +823,44 @@ class VBotSection001Env(NpEnv):
         dof_pos = np.tile(self._init_dof_pos, (num_envs, 1))
         dof_vel = np.tile(self._init_dof_vel, (num_envs, 1))
 
-        if self.random_push_scale > 0.0 and dof_vel.shape[1] >= 5:
+        # ===== 域随机化：初始条件噪声 =====
+        if hasattr(cfg, 'domain_randomization'):
+            dr = cfg.domain_randomization
+            
+            # 初始关节位置噪声 (only for actuated joints, not base position)
+            # Assuming last 12 DOFs are joint positions for the robot
+            num_robot_dofs = 12  # 12 actuated joints (4 legs × 3 joints)
+            if dof_pos.shape[1] >= num_robot_dofs:
+                qpos_noise = np.random.uniform(
+                    -dr.init_qpos_noise_scale,
+                    dr.init_qpos_noise_scale,
+                    (num_envs, num_robot_dofs)
+                ).astype(np.float32)
+                # Apply noise to robot joint positions (last 12 DOFs)
+                dof_pos[:, -num_robot_dofs:] += qpos_noise
+            
+            # 初始速度噪声
+            if dof_vel.shape[1] >= num_robot_dofs:
+                qvel_noise = np.random.uniform(
+                    -dr.init_qvel_noise_scale,
+                    dr.init_qvel_noise_scale,
+                    (num_envs, num_robot_dofs)
+                ).astype(np.float32)
+                # Apply noise to robot joint velocities (last 12 DOFs)
+                dof_vel[:, -num_robot_dofs:] += qvel_noise
+            
+            # 随机推力（替换原有逻辑）
+            if dof_vel.shape[1] >= 5:
+                for i in range(num_envs):
+                    if np.random.rand() < dr.random_push_prob:
+                        push_xy = np.random.uniform(
+                            -dr.random_push_scale,
+                            dr.random_push_scale,
+                            (2,)
+                        ).astype(np.float32)
+                        dof_vel[i, 3:5] = push_xy
+        elif self.random_push_scale > 0.0 and dof_vel.shape[1] >= 5:
+            # Fallback to original push logic if no domain randomization
             push_xy = np.random.uniform(-1.0, 1.0, size=(num_envs, 2)).astype(np.float32)
             push_xy *= self.random_push_scale
             dof_vel[:, 3:5] = push_xy

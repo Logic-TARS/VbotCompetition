@@ -31,6 +31,24 @@ class NoiseConfig:
     scale_linvel: float = 0.1
 
 @dataclass
+class DomainRandomization:
+    """Domain randomization configuration for improved robustness"""
+    # Robot parameter randomization
+    mass_scale_range: list = field(default_factory=lambda: [0.8, 1.2])  # Mass ±20%
+    friction_scale_range: list = field(default_factory=lambda: [0.5, 1.5])  # Friction ±50%
+    dof_damping_scale_range: list = field(default_factory=lambda: [0.8, 1.2])  # Joint damping ±20%
+    
+    # Environment parameter randomization
+    gravity_scale_range: list = field(default_factory=lambda: [0.9, 1.1])  # Gravity ±10%
+    wind_force_range: list = field(default_factory=lambda: [-0.1, 0.1])  # Side wind ±0.1N
+    
+    # Initial condition randomization
+    init_qpos_noise_scale: float = 0.05  # Initial joint position noise
+    init_qvel_noise_scale: float = 0.02  # Initial velocity noise
+    random_push_prob: float = 0.3  # 30% probability of random push
+    random_push_scale: float = 0.5  # Push force magnitude ±0.5m/s
+
+@dataclass
 class ControlConfig:
     # stiffness[N*m/rad] 使用XML中kp参数，仅作记录
     # damping[N*m*s/rad] 使用XML中kv参数，仅作记录
@@ -99,10 +117,17 @@ class RewardConfig:
             "heading_tracking": 1.0,        # 朝向跟踪奖励（新增）
             "forward_velocity": 0.5,        # 前进速度奖励（鼓励朝目标移动）
 
-            # ===== Locomotion稳定性奖励（保持但降低权重） =====
-            "orientation": -0.05,           # 姿态稳定（降低权重）
-            "lin_vel_z": -0.5,              # 垂直速度惩罚
-            "ang_vel_xy": -0.05,            # XY轴角速度惩罚
+            # ===== 姿态稳定性奖励（权重提升 4倍）=====
+            "orientation": -0.20,           # 从 -0.05 → -0.20 ⬆️ 姿态稳定
+            "lin_vel_z": -0.30,             # 新增：Z轴垂直速度惩罚 ⬆️
+            "ang_vel_xy": -0.15,            # 新增：横滚/俯仰角速度惩罚 ⬆️
+            
+            # ===== 新增：步态稳定性奖励 =====
+            "foot_air_time": 0.1,           # 鼓励规律足部触地
+            "contact_stability": 0.1,       # 奖励稳定接触
+            "action_smoothness": -0.01,     # 平滑动作过渡
+            
+            # ===== Locomotion稳定性奖励（保持原有权重） =====
             "torques": -1e-5,               # 扭矩惩罚
             "dof_vel": -5e-5,               # 关节速度惩罚
             "dof_acc": -2.5e-7,             # 关节加速度惩罚
@@ -370,6 +395,9 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
     arena_center: list = field(default_factory=lambda: [0.0, 0.0])  # 圆心坐标
     target_point_a: list = field(default_factory=lambda: [0.0, 0.0])  # 内圈触发点（+1分）
     target_point_b: list = field(default_factory=lambda: [0.0, 0.0])  # 圆心（+1分）
+
+    # Domain randomization for robustness
+    domain_randomization: DomainRandomization = field(default_factory=DomainRandomization)
 
     @dataclass
     class InitState:
