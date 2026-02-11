@@ -793,6 +793,7 @@ class VBotSection001Env(NpEnv):
         dof_pos[:, 3:6] = robot_init_pos
 
         # 竞技场模式：固定目标为内圈触发点 A
+        # hasattr checks provide robustness for external/custom configs that may not have these fields
         target_point_a = np.array(cfg.target_point_a if hasattr(cfg, 'target_point_a') else [0.0, 1.5], dtype=np.float32)
         arena_center = np.array(cfg.arena_center if hasattr(cfg, 'arena_center') else [0.0, 0.0], dtype=np.float32)
 
