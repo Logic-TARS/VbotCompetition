@@ -735,8 +735,8 @@ class VBotSection001Env(NpEnv):
         # ===== 6. 新增：鲁棒性奖励 =====
         
         # 前进速度奖励 (朝向目标的速度)
-        forward_direction = position_error / (distance_to_target[:, np.newaxis] + 1e-6)  # 归一化方向
-        forward_velocity = np.sum(base_lin_vel[:, :2] * forward_direction, axis=1)  # 点积
+        forward_direction = position_error / (distance_to_target[:, np.newaxis] + 1e-6)  # Normalized direction
+        forward_velocity = np.sum(base_lin_vel[:, :2] * forward_direction, axis=1)  # Dot product
         forward_velocity_reward = np.clip(forward_velocity, 0.0, 2.0)  # 只奖励正向速度，限制最大值
         
         # Z轴线速度惩罚 (垂直运动)
