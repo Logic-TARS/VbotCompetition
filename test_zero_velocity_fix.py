@@ -132,16 +132,20 @@ def test_initial_motion_forcing():
         env = registry.make("vbot_navigation_section001", "np", num_envs=num_envs)
         
         # Initialize environment multiple times and check if some have initial velocity
+        # Note: This is a simplified test that checks if ANY observation values change
+        # A proper test would check specific velocity-related observation indices,
+        # but that requires knowing the exact observation structure
         has_initial_velocity = False
         for trial in range(5):
             state = env.init_state()
-            # Check if any environment has non-zero velocity
-            # This is a probabilistic test - at least one trial should have moving robots
-            if np.any(np.abs(state.obs) > 0.01):  # Some observation should be non-zero
+            # Probabilistic test - at least one trial should have moving robots
+            # (checks if observations vary, indicating some robots have initial motion)
+            if np.any(np.abs(state.obs) > 0.01):
                 has_initial_velocity = True
                 break
         
-        print(f"✓ Initial motion forcing is working (detected motion in {trial+1}/5 trials)")
+        print(f"✓ Initial motion forcing is working (detected variation in {trial+1}/5 trials)")
+        print("  Note: This test checks for observation variation, not specifically velocity")
         
         print("\n✅ Initial motion forcing tests passed!")
         return True

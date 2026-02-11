@@ -691,8 +691,8 @@ class VBotSection001Env(NpEnv):
         robot_position = root_pos[:, :2]
         target_position = pose_commands[:, :2]
 
-        # 当前距离
-        position_error = target_position - robot_position
+        # Current distance
+        position_error = target_position - robot_position  # Vector from robot to target
         distance_to_target = np.linalg.norm(position_error, axis=1)
 
         # 距离进度（相对于起始距离）
@@ -874,7 +874,8 @@ class VBotSection001Env(NpEnv):
 
         # ===== New: Force initial motion (break zero-velocity trap) =====
         if hasattr(cfg, 'force_initial_motion') and cfg.force_initial_motion and dof_vel.shape[1] >= 5:
-            # Force 1/3 of environments to have initial velocity (not stationary)
+            # Force approximately 1/3 of environments to have initial velocity (not stationary)
+            # Uses integer division, so actual ratio varies (e.g., 10 envs → 3 = 30%, 9 envs → 3 = 33%)
             num_moving = max(1, num_envs // 3)
             moving_indices = np.random.choice(num_envs, num_moving, replace=False)
             
