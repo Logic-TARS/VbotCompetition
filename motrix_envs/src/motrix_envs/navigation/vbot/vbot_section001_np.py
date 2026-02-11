@@ -93,6 +93,9 @@ class VBotSection001Env(NpEnv):
         self._init_dof_pos[-self._num_action:] = self.default_angles
         self.action_filter_alpha = 0.3
 
+        self.random_push_scale = getattr(cfg, "random_push_scale", 0.3)
+        self.velocity_reward_weight = getattr(cfg, "velocity_reward_weight", 0.4)
+
         # --- 初始化摔倒/越界/计分相关变量(优先从cfg读取，缺失时使用合理默认值)
         # 倾斜角阈值(rad)，默认 45 deg
         self.fall_threshold_roll_pitch = getattr(cfg, "fall_threshold_roll_pitch", np.deg2rad(45.0))
@@ -237,7 +240,7 @@ class VBotSection001Env(NpEnv):
         
         # PD控制器：tau = kp * (target - current) - kv * vel
         kp = 80.0   # 位置增益
-        kv = 6.0    # 速度增益
+        kv = 4.0    # 速度增益
         
         pos_error = target_pos - current_pos
         torques = kp * pos_error - kv * current_vel
@@ -718,6 +721,11 @@ class VBotSection001Env(NpEnv):
         # 移除正向速度奖励，只保留惩罚
         # 仅当速度*误差*很大时才扣分，而非给分
         
+        # 速度跟踪奖励
+        lin_vel_error = np.sum(np.square(velocity_commands[:, :2] - base_lin_vel[:, :2]), axis=1)
+        tracking_lin_vel = np.exp(-lin_vel_error / 0.25)
+        velocity_reward = self.velocity_reward_weight * tracking_lin_vel
+
         # 姿态稳定性 (Orientation Penalty)
         projected_gravity = self._compute_projected_gravity(root_quat)
         # xy分量：对应roll/pitch的倾斜
@@ -736,6 +744,7 @@ class VBotSection001Env(NpEnv):
         reward = (
             progress_reward             # 距离势能
             + arrival_bonus             # 到达奖励
+            + velocity_reward           # 速度跟踪
             - orientation_penalty       # 姿态惩罚
             - action_rate_penalty       # 动作平滑
             - torque_penalty            # 能量效率
@@ -763,6 +772,11 @@ class VBotSection001Env(NpEnv):
         
         dof_pos = np.tile(self._init_dof_pos, (num_envs, 1))
         dof_vel = np.tile(self._init_dof_vel, (num_envs, 1))
+
+        if self.random_push_scale > 0.0 and dof_vel.shape[1] >= 5:
+            push_xy = np.random.uniform(-1.0, 1.0, size=(num_envs, 2)).astype(np.float32)
+            push_xy *= self.random_push_scale
+            dof_vel[:, 3:5] = push_xy
         
         # 设置 base 的 XYZ位置(DOF 3-5)
         dof_pos[:, 3:6] = robot_init_pos
