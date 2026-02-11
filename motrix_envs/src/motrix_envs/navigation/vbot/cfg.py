@@ -400,9 +400,9 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
     # Domain randomization for robustness
     domain_randomization: DomainRandomization = field(default_factory=DomainRandomization)
 
-    # ===== 新增：零速度陷阱恢复参数 =====
-    force_initial_motion: bool = True              # 强制初始速度
-    recovery_tilt_threshold: float = 80.0          # 允许恢复的倾斜角度阈值(度)
+    # ===== New: Zero-velocity trap recovery parameters =====
+    force_initial_motion: bool = True              # Force initial velocity
+    recovery_tilt_threshold: float = 80.0          # Recovery tilt angle threshold (degrees)
 
     @dataclass
     class InitState:
