@@ -105,7 +105,7 @@ class Asset:
 class Sensor:
     base_linvel = "base_linvel"
     base_gyro = "base_gyro"
-    feet = ["FR", "FL", "RR", "RL"]  # 足部接触力传感器名称
+    feet = ["FR_foot_contact", "FL_foot_contact", "RR_foot_contact", "RL_foot_contact"]  # 足部接触力传感器名称
 
 @dataclass
 class RewardConfig:
