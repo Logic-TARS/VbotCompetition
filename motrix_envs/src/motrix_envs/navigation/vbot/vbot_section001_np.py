@@ -792,19 +792,20 @@ class VBotSection001Env(NpEnv):
         # 设置 base 的 XYZ位置(DOF 3-5)
         dof_pos[:, 3:6] = robot_init_pos
 
-        # 目标位置设定(从cfg.commands.pose_command_range采样)
-        cmd_range = cfg.commands.pose_command_range
-        if len(cmd_range) != 6:
-            raise ValueError("commands.pose_command_range must have 6 values: dx_min, dy_min, yaw_min, dx_max, dy_max, yaw_max")
+        # 竞技场模式：固定目标为内圈触发点 A
+        target_point_a = np.array(cfg.target_point_a if hasattr(cfg, 'target_point_a') else [0.0, 1.5], dtype=np.float32)
+        arena_center = np.array(cfg.arena_center if hasattr(cfg, 'arena_center') else [0.0, 0.0], dtype=np.float32)
 
-        dx_min, dy_min, yaw_min, dx_max, dy_max, yaw_max = cmd_range
-        sampled = np.random.uniform(
-            low=np.array([dx_min, dy_min, yaw_min], dtype=np.float32),
-            high=np.array([dx_max, dy_max, yaw_max], dtype=np.float32),
-            size=(num_envs, 3),
-        )
-        target_positions = robot_init_pos[:, :2] + sampled[:, :2]
-        target_headings = sampled[:, 2:3]
+        # 所有机器狗的目标统一为内圈触发点 A
+        target_positions = np.tile(target_point_a + arena_center, (num_envs, 1))
+
+        # 朝向仍然随机（或也可以固定为 0）
+        if hasattr(cfg.commands, 'pose_command_range') and len(cfg.commands.pose_command_range) == 6:
+            yaw_min, yaw_max = cfg.commands.pose_command_range[2], cfg.commands.pose_command_range[5]
+            target_headings = np.random.uniform(yaw_min, yaw_max, size=(num_envs, 1)).astype(np.float32)
+        else:
+            target_headings = np.zeros((num_envs, 1), dtype=np.float32)
+
         pose_commands = np.concatenate([target_positions, target_headings], axis=1)
 
         # 归一化base的四元数(DOF 6-9)
