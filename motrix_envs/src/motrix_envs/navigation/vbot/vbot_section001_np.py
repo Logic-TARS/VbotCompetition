@@ -479,45 +479,46 @@ class VBotSection001Env(NpEnv):
 
     def _compute_terminated(self, state: NpEnvState) -> NpEnvState:
         """
-        重写终止条件，与locomotion stairs完全一致
+        改进的终止条件：允许机器狗从轻微倾斜中恢复
+        只在极端情况下才真正终止
         """
         data = state.data
-
-        # 1. 基座接触地面终止(使用传感器)
+        num_envs = self._num_envs
+        terminated = np.zeros(num_envs, dtype=bool)
+        
+        # ===== 1. 超时终止（保留）=====
+        if self._cfg.max_episode_steps:
+            timeout = state.info["steps"] >= self._cfg.max_episode_steps
+            terminated = np.logical_or(terminated, timeout)
+        
+        # ===== 2. 改进的摔倒检测（允许恢复）=====
+        root_pos, root_quat, root_vel = self._extract_root_state(data)
+        
+        # 使用配置的恢复阈值，默认80度（允许更大倾斜）
+        recovery_tilt_threshold = getattr(self._cfg, 'recovery_tilt_threshold', 80.0)
+        tilt_threshold_rad = np.deg2rad(recovery_tilt_threshold)
+        
+        # 计算投影重力，检测倾斜角度
+        gravity = self._compute_projected_gravity(root_quat)
+        tilt_angle = np.arccos(np.clip(gravity[:, 2], -1.0, 1.0))  # 与竖直的夹角
+        extreme_tilt = tilt_angle > tilt_threshold_rad  # 使用新阈值
+        
+        terminated = np.logical_or(terminated, extreme_tilt)
+        
+        # ===== 3. 基座接触地面（保留）=====
         try:
             base_contact_value = self._model.get_sensor_value("base_contact", data)
             if base_contact_value.ndim == 0:
                 base_contact = np.array([base_contact_value > 0.01], dtype=bool)
-            elif base_contact_value.shape[0] != self._num_envs:
-                base_contact = np.full(self._num_envs, base_contact_value.flatten()[0] > 0.01, dtype=bool)
+            elif base_contact_value.shape[0] != num_envs:
+                base_contact = np.full(num_envs, base_contact_value.flatten()[0] > 0.01, dtype=bool)
             else:
-                base_contact = (base_contact_value > 0.01).flatten()[:self._num_envs]
+                base_contact = (base_contact_value > 0.01).flatten()[:num_envs]
+            terminated = np.logical_or(terminated, base_contact)
         except Exception as e:
-            print(f"[Warning] 无法读取base_contact传感器: {e}")
-            base_contact = np.zeros(self._num_envs, dtype=bool)
-
-        # 2. 姿态检测终止 (摔倒检测)
-        try:
-            root_pos, root_quat, _ = self._extract_root_state(data)
-            # 使用 sensor.feet 或类似获取足部接触，这里简化为只用姿态
-            # 由于 _detect_fall 需要 foot_contacts (来自 _compute_reward 上下文或 sensor)，
-            # 这里为避免复杂依赖，如果 _detect_fall 所需信息不易得，可以简化为只检测角度
-
-            # 使用简化的姿态检测
-            qx, qy, qz, qw = root_quat[:, 0], root_quat[:, 1], root_quat[:, 2], root_quat[:, 3]
-            sinr_cosp = 2 * (qw * qx + qy * qz)
-            cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
-            roll = np.arctan2(sinr_cosp, cosr_cosp)
-            sinp = np.clip(2 * (qw * qy - qz * qx), -1.0, 1.0)
-            pitch = np.arcsin(sinp)
-
-            # 阈值与 dog_fall_frames 逻辑保持一致 (45度)
-            attitude_fail = (np.abs(roll) > self.fall_threshold_roll_pitch) | (np.abs(pitch) > self.fall_threshold_roll_pitch)
-        except Exception:
-            attitude_fail = np.zeros(self._num_envs, dtype=bool)
-
-        terminated = base_contact | attitude_fail
-
+            # 无法读取传感器时不使用此终止条件
+            pass
+        
         return state.replace(terminated=terminated)
 
     def _detect_fall(self, root_quat: np.ndarray, foot_contacts: np.ndarray) -> np.ndarray:
@@ -733,6 +734,11 @@ class VBotSection001Env(NpEnv):
 
         # ===== 6. 新增：鲁棒性奖励 =====
         
+        # 前进速度奖励 (朝向目标的速度)
+        forward_direction = position_error / (distance_to_target[:, np.newaxis] + 1e-6)  # 归一化方向
+        forward_velocity = np.sum(base_lin_vel[:, :2] * forward_direction, axis=1)  # 点积
+        forward_velocity_reward = np.clip(forward_velocity, 0.0, 2.0)  # 只奖励正向速度，限制最大值
+        
         # Z轴线速度惩罚 (垂直运动)
         lin_vel_z_penalty = np.square(root_vel[:, 2])
         
@@ -781,6 +787,7 @@ class VBotSection001Env(NpEnv):
             progress_reward             # 距离势能
             + arrival_bonus             # 到达奖励
             + velocity_reward           # 速度跟踪
+            + forward_velocity_reward * reward_scales.get("forward_velocity", 2.0)  # 前进速度奖励
             + orientation_penalty * reward_scales.get("orientation", -0.20)  # 姿态稳定（负权重）
             + lin_vel_z_penalty * reward_scales.get("lin_vel_z", -0.30)  # Z轴速度惩罚
             + ang_vel_xy_penalty * reward_scales.get("ang_vel_xy", -0.15)  # XY角速度惩罚
@@ -864,6 +871,19 @@ class VBotSection001Env(NpEnv):
             push_xy = np.random.uniform(-1.0, 1.0, size=(num_envs, 2)).astype(np.float32)
             push_xy *= self.random_push_scale
             dof_vel[:, 3:5] = push_xy
+
+        # ===== 新增：强制初始化运动（打破零速度陷阱）=====
+        if hasattr(cfg, 'force_initial_motion') and cfg.force_initial_motion and dof_vel.shape[1] >= 5:
+            # 强制 1/3 的环境有初始速度（而非静止）
+            num_moving = max(1, num_envs // 3)
+            moving_indices = np.random.choice(num_envs, num_moving, replace=False)
+            
+            # 随机初始前进速度（轻微推力）
+            initial_push = np.random.uniform(
+                -0.3, 0.3,
+                (num_moving, 2)  # XY方向速度 ±0.3 m/s
+            ).astype(np.float32)
+            dof_vel[moving_indices, 3:5] = initial_push
 
         # 设置 base 的 XYZ位置(DOF 3-5)
         dof_pos[:, 3:6] = robot_init_pos
