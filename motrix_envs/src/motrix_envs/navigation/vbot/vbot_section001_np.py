@@ -479,33 +479,33 @@ class VBotSection001Env(NpEnv):
 
     def _compute_terminated(self, state: NpEnvState) -> NpEnvState:
         """
-        改进的终止条件：允许机器狗从轻微倾斜中恢复
-        只在极端情况下才真正终止
+        Improved termination conditions: allows robot to recover from slight tilts.
+        Only terminates in extreme cases.
         """
         data = state.data
         num_envs = self._num_envs
         terminated = np.zeros(num_envs, dtype=bool)
         
-        # ===== 1. 超时终止（保留）=====
+        # ===== 1. Timeout termination (retained) =====
         if self._cfg.max_episode_steps:
             timeout = state.info["steps"] >= self._cfg.max_episode_steps
             terminated = np.logical_or(terminated, timeout)
         
-        # ===== 2. 改进的摔倒检测（允许恢复）=====
+        # ===== 2. Improved fall detection (allows recovery) =====
         root_pos, root_quat, root_vel = self._extract_root_state(data)
         
-        # 使用配置的恢复阈值，默认80度（允许更大倾斜）
+        # Use configured recovery threshold, default 80 degrees (allows larger tilt)
         recovery_tilt_threshold = getattr(self._cfg, 'recovery_tilt_threshold', 80.0)
         tilt_threshold_rad = np.deg2rad(recovery_tilt_threshold)
         
-        # 计算投影重力，检测倾斜角度
+        # Calculate projected gravity and detect tilt angle
         gravity = self._compute_projected_gravity(root_quat)
-        tilt_angle = np.arccos(np.clip(gravity[:, 2], -1.0, 1.0))  # 与竖直的夹角
-        extreme_tilt = tilt_angle > tilt_threshold_rad  # 使用新阈值
+        tilt_angle = np.arccos(np.clip(gravity[:, 2], -1.0, 1.0))  # Angle with vertical
+        extreme_tilt = tilt_angle > tilt_threshold_rad  # Using new threshold
         
         terminated = np.logical_or(terminated, extreme_tilt)
         
-        # ===== 3. 基座接触地面（保留）=====
+        # ===== 3. Base contact with ground (retained) =====
         try:
             base_contact_value = self._model.get_sensor_value("base_contact", data)
             if base_contact_value.ndim == 0:
@@ -516,7 +516,7 @@ class VBotSection001Env(NpEnv):
                 base_contact = (base_contact_value > 0.01).flatten()[:num_envs]
             terminated = np.logical_or(terminated, base_contact)
         except Exception as e:
-            # 无法读取传感器时不使用此终止条件
+            # Cannot read sensor, skip this termination condition
             pass
         
         return state.replace(terminated=terminated)
@@ -732,17 +732,17 @@ class VBotSection001Env(NpEnv):
         # xy分量：对应roll/pitch的倾斜
         orientation_penalty = np.sum(np.square(projected_gravity[:, :2]), axis=1)
 
-        # ===== 6. 新增：鲁棒性奖励 =====
+        # ===== 6. New: Robustness rewards =====
         
-        # 前进速度奖励 (朝向目标的速度)
+        # Forward velocity reward (velocity toward target)
         forward_direction = position_error / (distance_to_target[:, np.newaxis] + 1e-6)  # Normalized direction
         forward_velocity = np.sum(base_lin_vel[:, :2] * forward_direction, axis=1)  # Dot product
-        forward_velocity_reward = np.clip(forward_velocity, 0.0, 2.0)  # 只奖励正向速度，限制最大值
+        forward_velocity_reward = np.clip(forward_velocity, 0.0, 2.0)  # Only reward forward motion, limit max value
         
-        # Z轴线速度惩罚 (垂直运动)
+        # Z-axis linear velocity penalty (vertical motion)
         lin_vel_z_penalty = np.square(root_vel[:, 2])
         
-        # XY角速度惩罚 (横滚/俯仰角速度)
+        # XY angular velocity penalty (roll/pitch angular velocity)
         ang_vel_xy_penalty = np.sum(np.square(gyro[:, :2]), axis=1)
         
         # 足部接触稳定性奖励
@@ -872,23 +872,23 @@ class VBotSection001Env(NpEnv):
             push_xy *= self.random_push_scale
             dof_vel[:, 3:5] = push_xy
 
-        # ===== 新增：强制初始化运动（打破零速度陷阱）=====
+        # ===== New: Force initial motion (break zero-velocity trap) =====
         if hasattr(cfg, 'force_initial_motion') and cfg.force_initial_motion and dof_vel.shape[1] >= 5:
-            # 强制 1/3 的环境有初始速度（而非静止）
+            # Force 1/3 of environments to have initial velocity (not stationary)
             num_moving = max(1, num_envs // 3)
             moving_indices = np.random.choice(num_envs, num_moving, replace=False)
             
-            # 随机初始前进速度（轻微推力）
+            # Random initial forward velocity (light push)
             initial_push = np.random.uniform(
                 -0.3, 0.3,
-                (num_moving, 2)  # XY方向速度 ±0.3 m/s
+                (num_moving, 2)  # XY direction velocity ±0.3 m/s
             ).astype(np.float32)
             dof_vel[moving_indices, 3:5] = initial_push
 
-        # 设置 base 的 XYZ位置(DOF 3-5)
+        # Set base XYZ position (DOF 3-5)
         dof_pos[:, 3:6] = robot_init_pos
 
-        # 竞技场模式：固定目标为内圈触发点 A
+        # Arena mode: Fixed target at inner circle trigger point A
         # hasattr checks provide robustness for external/custom configs that may not have these fields
         target_point_a = np.array(cfg.target_point_a if hasattr(cfg, 'target_point_a') else [0.0, 1.5], dtype=np.float32)
         arena_center = np.array(cfg.arena_center if hasattr(cfg, 'arena_center') else [0.0, 0.0], dtype=np.float32)
