@@ -116,6 +116,7 @@ class RewardConfig:
 @registry.envcfg("vbot_navigation_flat")
 @dataclass
 class VBotEnvCfg(EnvCfg):
+    render_spacing: float = 0.0
     model_file: str = model_file
     reset_noise_scale: float = 0.01
     max_episode_seconds: float = 10
