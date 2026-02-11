@@ -111,27 +111,28 @@ class Sensor:
 class RewardConfig:
     scales: dict[str, float] = field(
         default_factory=lambda: {
-            # ===== 导航任务核心奖励 =====
-            "position_tracking": 2.0,      # 位置误差奖励（提高10倍）
-            "fine_position_tracking": 2.0,  # 精细位置奖励（提高10倍）
-            "heading_tracking": 1.0,        # 朝向跟踪奖励（新增）
-            "forward_velocity": 0.5,        # 前进速度奖励（鼓励朝目标移动）
-
-            # ===== 姿态稳定性奖励（权重提升 4倍）=====
-            "orientation": -0.20,           # 从 -0.05 → -0.20 ⬆️ 姿态稳定
-            "lin_vel_z": -0.30,             # 新增：Z轴垂直速度惩罚 ⬆️
-            "ang_vel_xy": -0.15,            # 新增：横滚/俯仰角速度惩罚 ⬆️
+            # ===== 第一梯队：强正奖励（驱动移动）=====
+            "forward_velocity": 2.0,              # NEW: 前进速度奖励（强驱动力）
+            "position_tracking": 1.5,             # 目标追踪（保留）
+            "fine_position_tracking": 2.0,        # 精细位置奖励
+            "heading_tracking": 1.0,              # 朝向跟踪奖励
             
-            # ===== 新增：步态稳定性奖励 =====
-            "foot_air_time": 0.1,           # 鼓励规律足部触地
-            "contact_stability": 0.1,       # 奖励稳定接触
-            "action_smoothness": -0.01,     # 平滑动作过渡
+            # ===== 第二梯队：弱惩罚（不禁止探索）=====
+            # 关键改变：大幅降低惩罚权重，让正奖励主导学习
+            "orientation": -0.05,                 # ⬇️ 从 -0.20 → -0.05 (4倍降低)
+            "lin_vel_z": -0.10,                   # ⬇️ 从 -0.30 → -0.10 (3倍降低)
+            "ang_vel_xy": -0.05,                  # ⬇️ 从 -0.15 → -0.05 (3倍降低)
             
-            # ===== Locomotion稳定性奖励（保持原有权重） =====
-            "torques": -1e-5,               # 扭矩惩罚
-            "dof_vel": -5e-5,               # 关节速度惩罚
-            "dof_acc": -2.5e-7,             # 关节加速度惩罚
-            "action_rate": -0.01,           # 动作变化率惩罚
+            # ===== 第三梯队：细粒度奖励（形成步态）=====
+            "foot_air_time": 0.3,                 # 鼓励规律摆腿
+            "action_smoothness": 0.1,             # 鼓励平滑动作
+            "contact_stability": 0.2,             # 鼓励足部接触
+            
+            # ===== 第四梯队：极弱惩罚（几乎无影响）=====
+            "torques": -0.00001,                  # 极低
+            "dof_vel": -5e-5,                     # 关节速度惩罚
+            "dof_acc": -2.5e-7,                   # 关节加速度惩罚
+            "action_rate": -0.001,                # 极低
 
             # ===== 终止惩罚 =====
             "termination": -200.0,          # 终止惩罚
@@ -398,6 +399,10 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
 
     # Domain randomization for robustness
     domain_randomization: DomainRandomization = field(default_factory=DomainRandomization)
+
+    # ===== New: Zero-velocity trap recovery parameters =====
+    force_initial_motion: bool = True              # Force initial velocity
+    recovery_tilt_threshold: float = 80.0          # Recovery tilt angle threshold (degrees)
 
     @dataclass
     class InitState:

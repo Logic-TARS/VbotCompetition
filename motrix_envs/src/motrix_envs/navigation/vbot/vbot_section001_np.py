@@ -479,45 +479,46 @@ class VBotSection001Env(NpEnv):
 
     def _compute_terminated(self, state: NpEnvState) -> NpEnvState:
         """
-        重写终止条件，与locomotion stairs完全一致
+        Improved termination conditions: allows robot to recover from slight tilts.
+        Only terminates in extreme cases.
         """
         data = state.data
-
-        # 1. 基座接触地面终止(使用传感器)
+        num_envs = self._num_envs
+        terminated = np.zeros(num_envs, dtype=bool)
+        
+        # ===== 1. Timeout termination (retained) =====
+        if self._cfg.max_episode_steps:
+            timeout = state.info["steps"] >= self._cfg.max_episode_steps
+            terminated = np.logical_or(terminated, timeout)
+        
+        # ===== 2. Improved fall detection (allows recovery) =====
+        root_pos, root_quat, root_vel = self._extract_root_state(data)
+        
+        # Use configured recovery threshold, default 80 degrees (allows larger tilt)
+        recovery_tilt_threshold = getattr(self._cfg, 'recovery_tilt_threshold', 80.0)
+        tilt_threshold_rad = np.deg2rad(recovery_tilt_threshold)
+        
+        # Calculate projected gravity and detect tilt angle
+        gravity = self._compute_projected_gravity(root_quat)
+        tilt_angle = np.arccos(np.clip(gravity[:, 2], -1.0, 1.0))  # Angle with vertical
+        extreme_tilt = tilt_angle > tilt_threshold_rad  # Using new threshold
+        
+        terminated = np.logical_or(terminated, extreme_tilt)
+        
+        # ===== 3. Base contact with ground (retained) =====
         try:
             base_contact_value = self._model.get_sensor_value("base_contact", data)
             if base_contact_value.ndim == 0:
                 base_contact = np.array([base_contact_value > 0.01], dtype=bool)
-            elif base_contact_value.shape[0] != self._num_envs:
-                base_contact = np.full(self._num_envs, base_contact_value.flatten()[0] > 0.01, dtype=bool)
+            elif base_contact_value.shape[0] != num_envs:
+                base_contact = np.full(num_envs, base_contact_value.flatten()[0] > 0.01, dtype=bool)
             else:
-                base_contact = (base_contact_value > 0.01).flatten()[:self._num_envs]
+                base_contact = (base_contact_value > 0.01).flatten()[:num_envs]
+            terminated = np.logical_or(terminated, base_contact)
         except Exception as e:
-            print(f"[Warning] 无法读取base_contact传感器: {e}")
-            base_contact = np.zeros(self._num_envs, dtype=bool)
-
-        # 2. 姿态检测终止 (摔倒检测)
-        try:
-            root_pos, root_quat, _ = self._extract_root_state(data)
-            # 使用 sensor.feet 或类似获取足部接触，这里简化为只用姿态
-            # 由于 _detect_fall 需要 foot_contacts (来自 _compute_reward 上下文或 sensor)，
-            # 这里为避免复杂依赖，如果 _detect_fall 所需信息不易得，可以简化为只检测角度
-
-            # 使用简化的姿态检测
-            qx, qy, qz, qw = root_quat[:, 0], root_quat[:, 1], root_quat[:, 2], root_quat[:, 3]
-            sinr_cosp = 2 * (qw * qx + qy * qz)
-            cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
-            roll = np.arctan2(sinr_cosp, cosr_cosp)
-            sinp = np.clip(2 * (qw * qy - qz * qx), -1.0, 1.0)
-            pitch = np.arcsin(sinp)
-
-            # 阈值与 dog_fall_frames 逻辑保持一致 (45度)
-            attitude_fail = (np.abs(roll) > self.fall_threshold_roll_pitch) | (np.abs(pitch) > self.fall_threshold_roll_pitch)
-        except Exception:
-            attitude_fail = np.zeros(self._num_envs, dtype=bool)
-
-        terminated = base_contact | attitude_fail
-
+            # Cannot read sensor, skip this termination condition
+            pass
+        
         return state.replace(terminated=terminated)
 
     def _detect_fall(self, root_quat: np.ndarray, foot_contacts: np.ndarray) -> np.ndarray:
@@ -690,8 +691,8 @@ class VBotSection001Env(NpEnv):
         robot_position = root_pos[:, :2]
         target_position = pose_commands[:, :2]
 
-        # 当前距离
-        position_error = target_position - robot_position
+        # Current distance
+        position_error = target_position - robot_position  # Vector from robot to target
         distance_to_target = np.linalg.norm(position_error, axis=1)
 
         # 距离进度（相对于起始距离）
@@ -720,28 +721,33 @@ class VBotSection001Env(NpEnv):
         arrival_bonus = np.where(reached & (~ever_reached), 10.0, 0.0)
         info["ever_reached"] = ever_reached | reached
 
-        # ===== 5. 速度/姿态惩罚 (使用配置的权重) =====
-        # 速度跟踪奖励
+        # ===== 5. Velocity/posture penalties (using configured weights) =====
+        # Velocity tracking reward
         lin_vel_error = np.sum(np.square(velocity_commands[:, :2] - base_lin_vel[:, :2]), axis=1)
         tracking_lin_vel = np.exp(-lin_vel_error / 0.25)
         velocity_reward = self.velocity_reward_weight * tracking_lin_vel
 
-        # 姿态稳定性 (Orientation Penalty) - 使用配置权重
+        # Posture stability (Orientation Penalty) - using configured weights
         projected_gravity = self._compute_projected_gravity(root_quat)
-        # xy分量：对应roll/pitch的倾斜
+        # xy components: correspond to roll/pitch tilt
         orientation_penalty = np.sum(np.square(projected_gravity[:, :2]), axis=1)
 
-        # ===== 6. 新增：鲁棒性奖励 =====
+        # ===== 6. New: Robustness rewards =====
         
-        # Z轴线速度惩罚 (垂直运动)
+        # Forward velocity reward (velocity toward target)
+        forward_direction = position_error / (distance_to_target[:, np.newaxis] + 1e-6)  # Normalized direction
+        forward_velocity = np.sum(base_lin_vel[:, :2] * forward_direction, axis=1)  # Dot product
+        forward_velocity_reward = np.clip(forward_velocity, 0.0, 2.0)  # Only reward forward motion, limit max value
+        
+        # Z-axis linear velocity penalty (vertical motion)
         lin_vel_z_penalty = np.square(root_vel[:, 2])
         
-        # XY角速度惩罚 (横滚/俯仰角速度)
+        # XY angular velocity penalty (roll/pitch angular velocity)
         ang_vel_xy_penalty = np.sum(np.square(gyro[:, :2]), axis=1)
         
-        # 足部接触稳定性奖励
+        # Foot contact stability reward
         try:
-            # 尝试获取足部接触力传感器数据
+            # Try to get foot contact force sensor data
             foot_contact_forces = []
             for foot_name in self._cfg.sensor.feet:
                 try:
@@ -750,52 +756,53 @@ class VBotSection001Env(NpEnv):
                         contact_force = contact_force[:, np.newaxis]
                     foot_contact_forces.append(contact_force)
                 except Exception:
-                    # 如果传感器不存在，使用零值
+                    # If sensor doesn't exist, use zero values
                     foot_contact_forces.append(np.zeros((num_envs, 1), dtype=np.float32))
             
             if len(foot_contact_forces) == 4:
                 foot_contacts = np.concatenate(foot_contact_forces, axis=1)  # [num_envs, 4]
-                # 至少2只脚接触地面视为稳定
+                # At least 2 feet touching ground is considered stable
                 stable_contacts = np.sum(foot_contacts > 0.1, axis=1) >= 2
                 contact_stability_reward = stable_contacts.astype(np.float32)
             else:
                 contact_stability_reward = np.zeros(num_envs, dtype=np.float32)
         except Exception:
-            # 如果获取足部接触失败，使用零奖励
+            # If getting foot contacts fails, use zero reward
             contact_stability_reward = np.zeros(num_envs, dtype=np.float32)
         
-        # 动作平滑性奖励（惩罚大幅度的动作变化）
+        # Action smoothness reward (penalize large action changes)
         action_diff = np.mean(np.abs(info["current_actions"] - info["last_actions"]), axis=1)
         
-        # 动作平滑惩罚 (原有的，保持兼容)
+        # Action rate penalty (original, maintain compatibility)
         action_rate_penalty = np.sum(np.square(info["current_actions"] - info["last_actions"]), axis=1)
 
-        # 能量惩罚
+        # Energy penalty
         torque_penalty = np.sum(np.square(data.actuator_ctrls), axis=1)
 
-        # ===== 7. 组合奖励（使用配置权重）=====
-        # 目标: 如果完美运行，Total = ~9 (Progress) + 10 (Arrival) - minimal_penalty ~= 19.0
-        # 范围: 0 ~ 20.0 (理想状态)
+        # ===== 7. Combined reward (using configured weights) =====
+        # Target: If perfect run, Total = ~9 (Progress) + 10 (Arrival) - minimal_penalty ~= 19.0
+        # Range: 0 ~ 20.0 (ideal state)
 
         reward = (
-            progress_reward             # 距离势能
-            + arrival_bonus             # 到达奖励
-            + velocity_reward           # 速度跟踪
-            + orientation_penalty * reward_scales.get("orientation", -0.20)  # 姿态稳定（负权重）
-            + lin_vel_z_penalty * reward_scales.get("lin_vel_z", -0.30)  # Z轴速度惩罚
-            + ang_vel_xy_penalty * reward_scales.get("ang_vel_xy", -0.15)  # XY角速度惩罚
-            + contact_stability_reward * reward_scales.get("contact_stability", 0.1)  # 接触稳定性
-            + action_diff * reward_scales.get("action_smoothness", -0.01)  # 动作平滑性
-            + action_rate_penalty * reward_scales.get("action_rate", -0.005)  # 动作变化率
-            + torque_penalty * reward_scales.get("torques", -0.00002)  # 能量效率
+            progress_reward             # Distance potential
+            + arrival_bonus             # Arrival bonus
+            + velocity_reward           # Velocity tracking
+            + forward_velocity_reward * reward_scales.get("forward_velocity", 2.0)  # Forward velocity reward
+            + orientation_penalty * reward_scales.get("orientation", -0.20)  # Posture stability (negative weight)
+            + lin_vel_z_penalty * reward_scales.get("lin_vel_z", -0.30)  # Z-axis velocity penalty
+            + ang_vel_xy_penalty * reward_scales.get("ang_vel_xy", -0.15)  # XY angular velocity penalty
+            + contact_stability_reward * reward_scales.get("contact_stability", 0.1)  # Contact stability
+            + action_diff * reward_scales.get("action_smoothness", -0.01)  # Action smoothness
+            + action_rate_penalty * reward_scales.get("action_rate", -0.005)  # Action rate
+            + torque_penalty * reward_scales.get("torques", -0.00002)  # Energy efficiency
         )
 
-        # ===== 8. 失败惩罚 (Terminal Penalty) =====
-        # 如果当前步触发了 terminated（意味着摔倒），给予一次性惩罚
-        # 简单起见，如果 orientation_penalty 极大 (>0.5 对应倾斜 >~45度)，给额外惩罚
+        # ===== 8. Failure penalty (Terminal Penalty) =====
+        # If current step triggered terminated (meaning fall), give one-time penalty
+        # For simplicity, if orientation_penalty is extreme (>0.5 corresponds to tilt >~45 degrees), give extra penalty
         reward = np.where(orientation_penalty > 0.5, reward - 10.0, reward)
 
-        # 防止数值不稳定传播：替换 NaN/inf 并返回 float32
+        # Prevent numerical instability propagation: replace NaN/inf and return float32
         reward = np.nan_to_num(reward, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32)
 
         return reward
@@ -865,10 +872,24 @@ class VBotSection001Env(NpEnv):
             push_xy *= self.random_push_scale
             dof_vel[:, 3:5] = push_xy
 
-        # 设置 base 的 XYZ位置(DOF 3-5)
+        # ===== New: Force initial motion (break zero-velocity trap) =====
+        if hasattr(cfg, 'force_initial_motion') and cfg.force_initial_motion and dof_vel.shape[1] >= 5:
+            # Force approximately 1/3 of environments to have initial velocity (not stationary)
+            # Uses integer division, so actual ratio varies (e.g., 10 envs → 3 = 30%, 9 envs → 3 = 33%)
+            num_moving = max(1, num_envs // 3)
+            moving_indices = np.random.choice(num_envs, num_moving, replace=False)
+            
+            # Random initial forward velocity (light push)
+            initial_push = np.random.uniform(
+                -0.3, 0.3,
+                (num_moving, 2)  # XY direction velocity ±0.3 m/s
+            ).astype(np.float32)
+            dof_vel[moving_indices, 3:5] = initial_push
+
+        # Set base XYZ position (DOF 3-5)
         dof_pos[:, 3:6] = robot_init_pos
 
-        # 竞技场模式：固定目标为内圈触发点 A
+        # Arena mode: Fixed target at inner circle trigger point A
         # hasattr checks provide robustness for external/custom configs that may not have these fields
         target_point_a = np.array(cfg.target_point_a if hasattr(cfg, 'target_point_a') else [0.0, 1.5], dtype=np.float32)
         arena_center = np.array(cfg.arena_center if hasattr(cfg, 'arena_center') else [0.0, 0.0], dtype=np.float32)
