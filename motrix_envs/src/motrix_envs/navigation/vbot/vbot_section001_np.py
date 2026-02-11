@@ -380,9 +380,43 @@ class VBotSection001Env(NpEnv):
         base_lin_vel = root_vel[:, :3]  # 世界坐标系线速度
         gyro = self._model.get_sensor_value(cfg.sensor.base_gyro, data)
         projected_gravity = self._compute_projected_gravity(root_quat)
+        
+        # ===== 更新计分和阶段（检测触发点） =====
+        # 获取足部接触传感器
+        foot_contacts = np.zeros((data.shape[0], 4), dtype=np.float32)
+        for i, foot_name in enumerate(cfg.sensor.feet):
+            foot_contacts[:, i] = self._model.get_sensor_value(foot_name, data)
+        
+        # 更新每只狗的得分和阶段
+        self._update_dog_scores(root_pos, root_quat, foot_contacts)
+        
+        # ===== 根据当前阶段动态更新目标位置 =====
+        pose_commands = state.info["pose_commands"].copy()  # 复制以避免修改原始数据
+        num_envs = data.shape[0]
+        
+        for i in range(num_envs):
+            if self.dog_stage[i] == 0:
+                # 阶段0：目标为内圈触发点A
+                pose_commands[i, :2] = self.target_point_a
+            elif self.dog_stage[i] == 1:
+                # 阶段1：目标为圆心触发点B
+                pose_commands[i, :2] = self.target_point_b
+            else:
+                # 阶段2：已完成，保持在圆心
+                pose_commands[i, :2] = self.target_point_b
+            
+            # 更新目标朝向：指向目标
+            robot_pos_2d = root_pos[i, :2]
+            target_pos_2d = pose_commands[i, :2]
+            pose_commands[i, 2] = np.arctan2(
+                target_pos_2d[1] - robot_pos_2d[1],
+                target_pos_2d[0] - robot_pos_2d[0]
+            )
+        
+        # 更新info中的pose_commands
+        state.info["pose_commands"] = pose_commands
 
         # 导航目标
-        pose_commands = state.info["pose_commands"]
         robot_position = root_pos[:, :2]
         robot_heading = self._get_heading_from_quat(root_quat)
         target_position = pose_commands[:, :2]
@@ -792,19 +826,35 @@ class VBotSection001Env(NpEnv):
         # 设置 base 的 XYZ位置(DOF 3-5)
         dof_pos[:, 3:6] = robot_init_pos
 
-        # 目标位置设定(从cfg.commands.pose_command_range采样)
-        cmd_range = cfg.commands.pose_command_range
-        if len(cmd_range) != 6:
-            raise ValueError("commands.pose_command_range must have 6 values: dx_min, dy_min, yaw_min, dx_max, dy_max, yaw_max")
-
-        dx_min, dy_min, yaw_min, dx_max, dy_max, yaw_max = cmd_range
-        sampled = np.random.uniform(
-            low=np.array([dx_min, dy_min, yaw_min], dtype=np.float32),
-            high=np.array([dx_max, dy_max, yaw_max], dtype=np.float32),
-            size=(num_envs, 3),
-        )
-        target_positions = robot_init_pos[:, :2] + sampled[:, :2]
-        target_headings = sampled[:, 2:3]
+        # ===== 修复：使用固定竞技场触发点，而非随机偏移 =====
+        # 所有机器狗初始阶段为0，目标为触发点A（内圈）
+        # 重置所有狗的阶段和触发状态
+        self._ensure_dog_arrays(num_envs)
+        self.dog_stage[:num_envs] = 0
+        self.dog_triggered_a[:num_envs] = False
+        self.dog_triggered_b[:num_envs] = False
+        self.dog_penalty_flags[:num_envs] = False
+        self.dog_scores[:num_envs] = 0.0
+        
+        # 根据阶段设置目标位置
+        target_positions = np.zeros((num_envs, 2), dtype=np.float32)
+        for i in range(num_envs):
+            if self.dog_stage[i] == 0:
+                # 阶段0：目标为内圈触发点A
+                target_positions[i] = self.target_point_a
+            elif self.dog_stage[i] == 1:
+                # 阶段1：目标为圆心触发点B
+                target_positions[i] = self.target_point_b
+            else:
+                # 阶段2：已完成，保持在圆心
+                target_positions[i] = self.target_point_b
+        
+        # 目标朝向：指向目标（从机器人位置指向目标的角度）
+        target_headings = np.arctan2(
+            target_positions[:, 1] - robot_init_pos[:, 1],
+            target_positions[:, 0] - robot_init_pos[:, 0]
+        )[:, np.newaxis]
+        
         pose_commands = np.concatenate([target_positions, target_headings], axis=1)
 
         # 归一化base的四元数(DOF 6-9)
