@@ -358,13 +358,19 @@ class VBotLongCourseEnvCfg(VBotStairsEnvCfg):
 class VBotSection001EnvCfg(VBotStairsEnvCfg):
     """VBot Section01单独训练配置 - 高台楼梯地形"""
     model_file: str = os.path.dirname(__file__) + "/xmls/scene_section001.xml"
-    max_episode_seconds: float = 40.0  # 拉长一倍：从20秒增加到40秒
-    max_episode_steps: int = 4000  # 拉长一倍：从2000步增加到4000步
+    
+    # 缩短距离到6米，给40秒足够完成
+    max_episode_seconds: float = 40.0
+    max_episode_steps: int = 2000  # 40s × 50Hz = 2000步 ✅
+    
     @dataclass
     class InitState:
-        # 起始位置：随机化范围内生成
-        pos = [0.0, -2.4, 0.5]  # 中心位置
-        pos_randomization_range = [-0.5, -0.5, 0.5, 0.5]  # X±0.5m, Y±0.5m随机
+        # pos = [0.0, -2.4, 0.5]  # 原始起点 (距离目标6m)
+        # [Curriculum Phase 1] 缩短距离至3m，极大增加早期训练的正反馈概率
+        pos = [0.0, 0.6, 0.5]     
+        
+        # 起始位置随机化 ±0.3m（小范围）
+        pos_randomization_range = [-0.3, -0.3, 0.3, 0.3]
 
         default_joint_angles = {
             "FR_hip_joint": -0.0,
@@ -380,19 +386,20 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
             "RL_thigh_joint": 0.9,
             "RL_calf_joint": -1.8,
         }
+    
     @dataclass
     class Commands:
-        # 目标位置：缩短距离，固定目标点
-        # 起始位置Y=-2.4, 目标Y=3.6, 距离=6米（与vbot_np相近）
-        # pose_command_range = [0.0, 3.6, 0.0, 0.0, 3.6, 0.0]
-        # 原始配置（已注释）：
-        # 目标位置：固定在终止角范围远端（完全无随机化）
-        # 固定目标点: X=0, Y=10.2, Z=2 (Z通过XML控制)
-        # 起始位置Y=-2.4, 目标Y=10.2, 距离=12.6米
-        pose_command_range = [0.0, 10.2, 0.0, 0.0, 10.2, 0.0]
+        # 目标位置：Y=3.6，距离=6米（合理）
+        # 添加小范围随机化防止过拟合
+        pose_command_range = [
+            -0.2, 3.4, -0.3,  # X±0.2m, Y=3.4~3.8m, yaw±0.3rad
+             0.2, 3.8,  0.3
+        ]
+    
     @dataclass
     class ControlConfig:
         action_scale = 0.25
+        
     init_state: InitState = field(default_factory=InitState)
     commands: Commands = field(default_factory=Commands)
     control_config: ControlConfig = field(default_factory=ControlConfig)

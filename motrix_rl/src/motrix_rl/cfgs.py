@@ -307,29 +307,30 @@ class navigation:
     @dataclass
     class VbotPPOConfig(PPOCfg):
         # ===== Basic Training Parameters =====
-        seed: int = 42  # Random seed
-        # Match VBot Section001 training scale: fewer envs to balance throughput
-        num_envs: int = 1024  # Number of parallel environments during training
-        play_num_envs: int = 16  # Number of parallel environments during evaluation
-        # Align with env single-episode max steps (env.max_episode_steps == 4000)
-        # Choose a reasonable total training budget: 4_000_000 steps
-        max_env_steps: int = 4_000_000  # Maximum training steps
-        check_point_interval: int = 1000  # Checkpoint save interval (save every 1000 iterations)
-
+        seed: int = 42
+        
+        # 环境数量（根据GPU显存调整）
+        num_envs: int = 512  # 训练环境（16GB GPU适用）
+        play_num_envs: int = 16  # 评估环境
+        
+        # 训练步数（4M steps ≈ 170 iterations ≈ 3-4小时）
+        max_env_steps: int = 4_000_000  # 4M steps
+        check_point_interval: int = 50  # 每50次迭代保存
+        
         # ===== PPO Algorithm Core Parameters =====
-        learning_rate: float = 3e-4  # Learning rate
-        rollouts: int = 48  # Number of experience replay rollouts
-        learning_epochs: int = 8  # Increase epochs slightly for stability on navigation
-        mini_batches: int = 32  # Number of mini-batches
-        discount_factor: float = 0.99  # Discount factor
-        lambda_param: float = 0.95  # GAE parameter
-        grad_norm_clip: float = 1.0  # Gradient clipping
-
+        learning_rate: float = 1e-4  # 保守学习率
+        rollouts: int = 48  # 保持不变
+        learning_epochs: int = 8  # 保持不变
+        mini_batches: int = 32  # 保持不变
+        discount_factor: float = 0.99
+        lambda_param: float = 0.95
+        grad_norm_clip: float = 1.0
+        
         # ===== PPO Clipping Parameters =====
-        ratio_clip: float = 0.2  # PPO clipping ratio
-        value_clip: float = 0.2  # Value clipping
-        clip_predicted_values: bool = True  # Clip predicted values
-
-        # Medium-sized network (suitable for VBot navigation)
+        ratio_clip: float = 0.2
+        value_clip: float = 0.2
+        clip_predicted_values: bool = True
+        
+        # 网络结构（导航任务适中即可）
         policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
         value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
