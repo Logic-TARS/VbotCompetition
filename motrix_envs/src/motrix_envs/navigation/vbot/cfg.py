@@ -81,6 +81,7 @@ class Asset:
     body_name = "base"
     foot_names = ["FR", "FL", "RR", "RL"]
     terminate_after_contacts_on = ["collision_middle_box", "collision_head_box"]
+    ground_name = "ground"  # 地面几何体名称（用于接触检测）
     ground_subtree = "C_"  # 地形根节点，用于subtree接触检测
 
 @dataclass

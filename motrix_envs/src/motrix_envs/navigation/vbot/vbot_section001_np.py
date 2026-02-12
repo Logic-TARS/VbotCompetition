@@ -464,6 +464,19 @@ class VBotSection001Env(NpEnv):
         base_lin_vel_xy = base_lin_vel[:, :2]
         self._update_heading_arrows(data, root_pos, desired_vel_xy, base_lin_vel_xy)
 
+        # 增加步数计数器（用于保护期和超时检测）
+        state.info["steps"] = state.info.get("steps", np.zeros(data.shape[0], dtype=np.int32)) + 1
+
+        # 更新计分系统（在计算奖励之前）
+        # foot_contacts can be obtained from sensors, but for now we pass None
+        # as the scoring system handles it internally through _detect_fall
+        try:
+            foot_contacts = None  # Could get from sensors if needed
+            self._update_dog_scores(root_pos, root_quat, foot_contacts)
+        except Exception as e:
+            # Scoring system is optional, don't fail if it errors
+            pass
+
         # 计算奖励
         reward = self._compute_reward(data, state.info, velocity_commands)
 
@@ -479,9 +492,18 @@ class VBotSection001Env(NpEnv):
 
     def _compute_terminated(self, state: NpEnvState) -> NpEnvState:
         """
-        重写终止条件，与locomotion stairs完全一致
+        重写终止条件，与locomotion stairs完全一致，增加保护期和越界检测
         """
         data = state.data
+
+        # 保护期：前20帧不终止（防止物理引擎初始化抖动导致的"出生即死"）
+        GRACE_PERIOD = 20
+        steps = state.info.get("steps", np.zeros(self._num_envs, dtype=np.int32))
+        if isinstance(steps, np.ndarray):
+            in_grace_period = steps < GRACE_PERIOD
+        else:
+            # If steps is a scalar, convert to array
+            in_grace_period = np.full(self._num_envs, steps < GRACE_PERIOD, dtype=bool)
 
         # 1. 基座接触地面终止(使用传感器)
         try:
@@ -513,10 +535,18 @@ class VBotSection001Env(NpEnv):
 
             # 阈值与 dog_fall_frames 逻辑保持一致 (45度)
             attitude_fail = (np.abs(roll) > self.fall_threshold_roll_pitch) | (np.abs(pitch) > self.fall_threshold_roll_pitch)
+            
+            # 3. 越界检测终止
+            out_of_bounds = self._detect_out_of_bounds(root_pos)
         except Exception:
             attitude_fail = np.zeros(self._num_envs, dtype=bool)
+            out_of_bounds = np.zeros(self._num_envs, dtype=bool)
 
-        terminated = base_contact | attitude_fail
+        # 组合所有终止条件
+        terminated = base_contact | attitude_fail | out_of_bounds
+        
+        # 在保护期内，忽略所有终止条件
+        terminated = np.where(in_grace_period, False, terminated)
 
         return state.replace(terminated=terminated)
 
@@ -701,21 +731,33 @@ class VBotSection001Env(NpEnv):
         reached = distance_to_target < 0.3
 
         # ===== 3. 密集奖励：距离进步 (Distance Progress) =====
-        # 总距离6米 -> 期望贡献 ~9分 (6.0 * 1.5)
-        # 修正系数：2.0 -> 1.5
+        # 提高系数从 1.5 到 2.0 以鼓励更快速的前进
         distance_progress = info.get("last_distance", distance_to_target) - distance_to_target
         info["last_distance"] = distance_to_target.copy()
 
         # 限制单步奖励防止瞬间跳跃
-        progress_reward = np.clip(distance_progress * 1.5, -0.5, 0.5)
+        progress_reward = np.clip(distance_progress * 2.0, -0.5, 0.5)
 
-        # ===== 4. 稀疏奖励：到达目标 (Arrival Bonus) =====
-        # Only once per episode
-        if "ever_reached" not in info:
-            info["ever_reached"] = np.zeros(num_envs, dtype=bool)
-        ever_reached = info["ever_reached"]
-        arrival_bonus = np.where(reached & (~ever_reached), 10.0, 0.0)
-        info["ever_reached"] = ever_reached | reached
+        # ===== 4. 两阶段稀疏奖励：内圈 + 圆心 =====
+        # 使用已有的 _check_trigger_points 实现两阶段奖励
+        triggered_a, triggered_b = self._check_trigger_points(root_pos)
+        
+        # 阶段一：首次到达内圈围栏 +5.0
+        if "triggered_a" not in info:
+            info["triggered_a"] = np.zeros(num_envs, dtype=bool)
+        first_trigger_a = triggered_a & (~info["triggered_a"])
+        info["triggered_a"] = info["triggered_a"] | triggered_a
+        stage1_bonus = np.where(first_trigger_a, 5.0, 0.0)
+        
+        # 阶段二：首次到达圆心 +5.0
+        if "triggered_b" not in info:
+            info["triggered_b"] = np.zeros(num_envs, dtype=bool)
+        first_trigger_b = triggered_b & (~info["triggered_b"])
+        info["triggered_b"] = info["triggered_b"] | triggered_b
+        stage2_bonus = np.where(first_trigger_b, 5.0, 0.0)
+        
+        # 存活奖励：每步 +0.01（鼓励生存和探索）
+        alive_bonus = 0.01
 
         # ===== 5. 速度/姿态惩罚 (Penalty Only) =====
         # 移除正向速度奖励，只保留惩罚
@@ -738,12 +780,19 @@ class VBotSection001Env(NpEnv):
         torque_penalty = np.sum(np.square(data.actuator_ctrls), axis=1) * 0.00002
 
         # ===== 6. 组合奖励 =====
-        # 目标: 如果完美运行，Total = ~9 (Progress) + 10 (Arrival) - minimal_penalty ~= 19.0
-        # 范围: 0 ~ 20.0 (理想状态)
+        # 新的两阶段奖励结构：
+        # - progress_reward: 距离进步密集奖励 (系数2.0)
+        # - stage1_bonus: 首次到达内圈 +5.0
+        # - stage2_bonus: 首次到达圆心 +5.0
+        # - alive_bonus: 存活奖励 +0.01/step
+        # - velocity_reward: 速度跟踪
+        # - penalties: 姿态、动作平滑、能量
 
         reward = (
-            progress_reward             # 距离势能
-            + arrival_bonus             # 到达奖励
+            progress_reward             # 距离进步（密集）
+            + stage1_bonus              # 内圈奖励（稀疏）
+            + stage2_bonus              # 圆心奖励（稀疏）
+            + alive_bonus               # 存活奖励
             + velocity_reward           # 速度跟踪
             - orientation_penalty       # 姿态惩罚
             - action_rate_penalty       # 动作平滑
@@ -792,19 +841,11 @@ class VBotSection001Env(NpEnv):
         # 设置 base 的 XYZ位置(DOF 3-5)
         dof_pos[:, 3:6] = robot_init_pos
 
-        # 目标位置设定(从cfg.commands.pose_command_range采样)
-        cmd_range = cfg.commands.pose_command_range
-        if len(cmd_range) != 6:
-            raise ValueError("commands.pose_command_range must have 6 values: dx_min, dy_min, yaw_min, dx_max, dy_max, yaw_max")
-
-        dx_min, dy_min, yaw_min, dx_max, dy_max, yaw_max = cmd_range
-        sampled = np.random.uniform(
-            low=np.array([dx_min, dy_min, yaw_min], dtype=np.float32),
-            high=np.array([dx_max, dy_max, yaw_max], dtype=np.float32),
-            size=(num_envs, 3),
-        )
-        target_positions = robot_init_pos[:, :2] + sampled[:, :2]
-        target_headings = sampled[:, 2:3]
+        # 目标位置设定：固定为圆心(比赛规则)
+        # 所有机器狗都以圆心为目标，不使用随机偏移
+        arena_center = np.array(cfg.arena_center, dtype=np.float32)
+        target_positions = np.tile(arena_center, (num_envs, 1))
+        target_headings = np.zeros((num_envs, 1), dtype=np.float32)
         pose_commands = np.concatenate([target_positions, target_headings], axis=1)
 
         # 归一化base的四元数(DOF 6-9)
@@ -932,7 +973,6 @@ class VBotSection001Env(NpEnv):
             ],
             axis=-1,
         )
-        print(f"obs.shape:{obs.shape}")
         assert obs.shape == (num_envs, 54)  # 54维
 
         info = {
@@ -942,6 +982,10 @@ class VBotSection001Env(NpEnv):
             "filtered_actions": np.zeros((num_envs, self._num_action), dtype=np.float32),
             "ever_reached": np.zeros(num_envs, dtype=bool),
             "min_distance": distance_to_target.copy(),
+            "steps": np.zeros(num_envs, dtype=np.int32),  # For grace period
+            "last_distance": distance_to_target.copy(),  # For progress reward
+            "triggered_a": np.zeros(num_envs, dtype=bool),  # Two-stage reward tracking
+            "triggered_b": np.zeros(num_envs, dtype=bool),  # Two-stage reward tracking
         }
 
         return obs, info
