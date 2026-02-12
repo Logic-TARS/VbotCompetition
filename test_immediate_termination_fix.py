@@ -211,24 +211,24 @@ def test_reset_position_logic():
         [pr[0], pr[1]], [pr[2], pr[3]], (num_envs, 2)
     ).astype(np.float32)
     robot_init_pos[:, :2] += xy_noise
-    robot_init_pos[:, 2] = 0.35
+    # Z height comes from cfg.init_state.pos (not hardcoded)
     
     tests_passed = 0
     tests_failed = 0
     
     # Check all positions are near cfg.init_state.pos
-    expected_x, expected_y = 0.0, 0.6
+    expected_x, expected_y, expected_z = cfg.init_state.pos
     positions_valid = True
     for i in range(num_envs):
         x_valid = (expected_x - 0.3) <= robot_init_pos[i, 0] <= (expected_x + 0.3)
         y_valid = (expected_y - 0.3) <= robot_init_pos[i, 1] <= (expected_y + 0.3)
-        z_valid = abs(robot_init_pos[i, 2] - 0.35) < 0.001
+        z_valid = abs(robot_init_pos[i, 2] - expected_z) < 0.001
         if not (x_valid and y_valid and z_valid):
             positions_valid = False
             break
     
     if positions_valid:
-        print(f"✓ All positions near cfg.init_state.pos [{expected_x}, {expected_y}, 0.35]")
+        print(f"✓ All positions near cfg.init_state.pos {cfg.init_state.pos}")
         tests_passed += 1
     else:
         print(f"❌ Positions outside expected range")
