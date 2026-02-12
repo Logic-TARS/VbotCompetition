@@ -826,6 +826,7 @@ class VBotSection001Env(NpEnv):
 
         # ===== Use cfg.init_state.pos as base position + small randomization =====
         # This respects curriculum learning configuration instead of overriding it with polar coordinates
+        # Z height (0.35m) comes from cfg.init_state.pos[2] to reduce fall impact
         base_pos = np.array(cfg.init_state.pos, dtype=np.float32)
         robot_init_pos = np.tile(base_pos, (num_envs, 1))
         
@@ -836,8 +837,8 @@ class VBotSection001Env(NpEnv):
                 [pr[0], pr[1]], [pr[2], pr[3]], (num_envs, 2)
             ).astype(np.float32)
             robot_init_pos[:, :2] += xy_noise
+        # Note: Z coordinate preserved from cfg.init_state.pos (no override)
         
-        # Use Z height from cfg.init_state.pos (already set to 0.35 in config)
         dof_pos = np.tile(self._init_dof_pos, (num_envs, 1))
         dof_vel = np.tile(self._init_dof_vel, (num_envs, 1))
 
