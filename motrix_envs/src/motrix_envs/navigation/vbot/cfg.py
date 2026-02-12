@@ -389,10 +389,10 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
     max_episode_seconds: float = 40.0
     max_episode_steps: int = 2000  # 40s × 50Hz = 2000步 ✅
 
-    # 竞技场参数
+    # 竞技场参数 — 扩大边界避免初始位置太靠近边界
     arena_outer_radius: float = 3.0  # 外圈半径
     arena_inner_radius: float = 1.5  # 内圈半径
-    boundary_radius: float = 3.5  # 物理边界半径
+    boundary_radius: float = 5.0  # ⬆️ Fix Bug 1: 3.5 → 5.0 物理边界半径
     arena_center: list = field(default_factory=lambda: [0.0, 0.0])  # 圆心坐标
     target_point_a: list = field(default_factory=lambda: [0.0, 0.0])  # 内圈触发点（+1分）
     target_point_b: list = field(default_factory=lambda: [0.0, 0.0])  # 圆心（+1分）
@@ -408,7 +408,8 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
     class InitState:
         # pos = [0.0, -2.4, 0.5]  # 原始起点 (距离目标6m)
         # [Curriculum Phase 1] 缩短距离至3m，极大增加早期训练的正反馈概率
-        pos = [0.0, 0.6, 0.5]
+        # ⬇️ Fix Bug 1: Lower Z from 0.5 → 0.35 to reduce fall impact
+        pos = [0.0, 0.6, 0.35]
 
         # 起始位置随机化 ±0.3m（小范围）
         pos_randomization_range = [-0.3, -0.3, 0.3, 0.3]

@@ -505,16 +505,23 @@ class VBotSection001Env(NpEnv):
         
         terminated = np.logical_or(terminated, extreme_tilt)
         
-        # ===== 3. Base contact with ground (retained) =====
+        # ===== 3. Base contact with ground — with grace period + higher threshold =====
+        # Grace period: first 50 steps (~0.5 seconds) to allow landing stabilization
+        GRACE_STEPS = 50
+        current_steps = state.info.get("steps", np.zeros(num_envs, dtype=np.int32))
+        past_grace = current_steps > GRACE_STEPS
+        
         try:
             base_contact_value = self._model.get_sensor_value("base_contact", data)
+            # Increased threshold from 0.01 → 0.1 to avoid false positives on landing
             if base_contact_value.ndim == 0:
-                base_contact = np.array([base_contact_value > 0.01], dtype=bool)
+                base_contact = np.array([base_contact_value > 0.1], dtype=bool)
             elif base_contact_value.shape[0] != num_envs:
-                base_contact = np.full(num_envs, base_contact_value.flatten()[0] > 0.01, dtype=bool)
+                base_contact = np.full(num_envs, base_contact_value.flatten()[0] > 0.1, dtype=bool)
             else:
-                base_contact = (base_contact_value > 0.01).flatten()[:num_envs]
-            terminated = np.logical_or(terminated, base_contact)
+                base_contact = (base_contact_value > 0.1).flatten()[:num_envs]
+            # Only apply termination after grace period
+            terminated = np.logical_or(terminated, base_contact & past_grace)
         except Exception as e:
             # Cannot read sensor, skip this termination condition
             pass
@@ -798,9 +805,10 @@ class VBotSection001Env(NpEnv):
         )
 
         # ===== 8. Failure penalty (Terminal Penalty) =====
-        # If current step triggered terminated (meaning fall), give one-time penalty
-        # For simplicity, if orientation_penalty is extreme (>0.5 corresponds to tilt >~45 degrees), give extra penalty
-        reward = np.where(orientation_penalty > 0.5, reward - 10.0, reward)
+        # Progressive penalty instead of hard-coded -10.0 to avoid sudden drops during landing
+        # Only applies when orientation_penalty > 0.5 (roughly 45° tilt)
+        extreme_tilt_penalty = np.clip((orientation_penalty - 0.5) * 5.0, 0.0, 3.0)
+        reward = reward - extreme_tilt_penalty
 
         # Prevent numerical instability propagation: replace NaN/inf and return float32
         reward = np.nan_to_num(reward, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32)
@@ -812,20 +820,21 @@ class VBotSection001Env(NpEnv):
         cfg: VBotSection001EnvCfg = self._cfg
         num_envs = data.shape[0]
 
-        # ===== 极坐标随机生成在外圈 =====
-        # 每只机器狗在外圈随机分布（半径 3.0 ± 0.1m）
-        robot_init_xy = np.zeros((num_envs, 2), dtype=np.float32)
-        for i in range(num_envs):
-            theta = np.random.uniform(0, 2 * np.pi)
-            radius = cfg.arena_outer_radius + np.random.uniform(-0.1, 0.1)
-            robot_init_xy[i, 0] = radius * np.cos(theta)
-            robot_init_xy[i, 1] = radius * np.sin(theta)
-
-        # 添加圆心偏移（如果存在）
-        robot_init_xy += np.array(cfg.arena_center, dtype=np.float32)
-
-        # 构造完整的XYZ位置（高度固定为0.5m）
-        robot_init_pos = np.column_stack([robot_init_xy, np.full(num_envs, 0.5, dtype=np.float32)])
+        # ===== Use cfg.init_state.pos as base position + small randomization =====
+        # This respects curriculum learning configuration instead of overriding it with polar coordinates
+        base_pos = np.array(cfg.init_state.pos, dtype=np.float32)
+        robot_init_pos = np.tile(base_pos, (num_envs, 1))
+        
+        # Small XY randomization based on pos_randomization_range
+        if hasattr(cfg.init_state, 'pos_randomization_range'):
+            pr = cfg.init_state.pos_randomization_range
+            xy_noise = np.random.uniform(
+                [pr[0], pr[1]], [pr[2], pr[3]], (num_envs, 2)
+            ).astype(np.float32)
+            robot_init_pos[:, :2] += xy_noise
+        
+        # Lower initial height from 0.5m → 0.35m to reduce fall impact during landing
+        robot_init_pos[:, 2] = 0.35
 
         dof_pos = np.tile(self._init_dof_pos, (num_envs, 1))
         dof_vel = np.tile(self._init_dof_vel, (num_envs, 1))
@@ -1041,6 +1050,8 @@ class VBotSection001Env(NpEnv):
             "filtered_actions": np.zeros((num_envs, self._num_action), dtype=np.float32),
             "ever_reached": np.zeros(num_envs, dtype=bool),
             "min_distance": distance_to_target.copy(),
+            "last_distance": distance_to_target.copy(),  # ✅ Fix Bug 4: Add for distance progress calculation
+            "steps": np.zeros(num_envs, dtype=np.int32),  # ✅ Fix Bug 4: Add for grace period mechanism
         }
 
         return obs, info
