@@ -93,9 +93,11 @@ def test_code_logic_simulation():
         print(f"❌ Grace period failed: Terminated during grace period")
         tests_failed += 1
     
-    # After grace period with high contact
+    # After grace period with high contact (should terminate)
     current_steps = np.array([100] * num_envs, dtype=np.int32)
+    base_contact_value = np.array([0.15] * num_envs)  # Still above threshold
     past_grace = current_steps > GRACE_STEPS
+    base_contact = base_contact_value > threshold  # Recalculate from value
     terminated = base_contact & past_grace
     
     if np.all(terminated):
@@ -105,9 +107,9 @@ def test_code_logic_simulation():
         print(f"❌ Post-grace period failed: Should terminate")
         tests_failed += 1
     
-    # Low contact (below threshold)
-    base_contact_value = np.array([0.05] * num_envs)
-    base_contact = base_contact_value > threshold
+    # Low contact (below threshold) - should not terminate even after grace
+    base_contact_value = np.array([0.05] * num_envs)  # Below threshold
+    base_contact = base_contact_value > threshold  # Recalculate
     terminated = base_contact & past_grace
     
     if np.all(~terminated):
