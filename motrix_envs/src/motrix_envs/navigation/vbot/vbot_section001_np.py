@@ -369,6 +369,10 @@ class VBotSection001Env(NpEnv):
         """
         data = state.data
         cfg = self._cfg
+        
+        # Increment step counter for grace period and timeout tracking
+        if "steps" in state.info:
+            state.info["steps"] = state.info["steps"] + 1
 
         # 获取基础状态
         root_pos, root_quat, root_vel = self._extract_root_state(data)
@@ -833,9 +837,7 @@ class VBotSection001Env(NpEnv):
             ).astype(np.float32)
             robot_init_pos[:, :2] += xy_noise
         
-        # Lower initial height from 0.5m → 0.35m to reduce fall impact during landing
-        robot_init_pos[:, 2] = 0.35
-
+        # Use Z height from cfg.init_state.pos (already set to 0.35 in config)
         dof_pos = np.tile(self._init_dof_pos, (num_envs, 1))
         dof_vel = np.tile(self._init_dof_vel, (num_envs, 1))
 
