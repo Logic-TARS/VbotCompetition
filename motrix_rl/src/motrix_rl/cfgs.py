@@ -314,7 +314,7 @@ class navigation:
         play_num_envs: int = 16  # 评估环境
         
         # 训练步数（4M steps ≈ 170 iterations ≈ 3-4小时）
-        max_env_steps: int = 4_000_000  # 4M steps
+        max_env_steps: int = 8_000_000  # 4M steps
         check_point_interval: int = 50  # 每50次迭代保存
         
         # ===== PPO Algorithm Core Parameters =====
