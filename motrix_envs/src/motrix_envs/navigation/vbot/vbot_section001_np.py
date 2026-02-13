@@ -458,11 +458,27 @@ class VBotSection001Env(NpEnv):
             axis=-1,
         )
         assert obs.shape == (data.shape[0], 54)  # 54维
+        
+        # 防止 NaN/Inf 传播到神经网络导致 CUDA 崩溃
+        obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
         # 更新目标标记和箭头
         self._update_target_marker(data, pose_commands)
         base_lin_vel_xy = base_lin_vel[:, :2]
         self._update_heading_arrows(data, root_pos, desired_vel_xy, base_lin_vel_xy)
+
+        # 增加步数计数器（用于保护期和超时检测）
+        state.info["steps"] = state.info.get("steps", np.zeros(data.shape[0], dtype=np.int32)) + 1
+
+        # 更新计分系统（在计算奖励之前）
+        # foot_contacts can be obtained from sensors, but for now we pass None
+        # as the scoring system handles it internally through _detect_fall
+        try:
+            foot_contacts = None  # Could get from sensors if needed
+            self._update_dog_scores(root_pos, root_quat, foot_contacts)
+        except Exception as e:
+            # Scoring system is optional, don't fail if it errors
+            pass
 
         # 计算奖励
         reward = self._compute_reward(data, state.info, velocity_commands)
@@ -479,33 +495,26 @@ class VBotSection001Env(NpEnv):
 
     def _compute_terminated(self, state: NpEnvState) -> NpEnvState:
         """
-        Improved termination conditions: allows robot to recover from slight tilts.
-        Only terminates in extreme cases.
+        重写终止条件：包含保护期、超时、基座接触、极端倾斜与越界检测
         """
         data = state.data
         num_envs = self._num_envs
         terminated = np.zeros(num_envs, dtype=bool)
-        
-        # ===== 1. Timeout termination (retained) =====
+
+        # 保护期：前20帧不终止（防止物理引擎初始化抖动导致的"出生即死"）
+        GRACE_PERIOD = 20
+        steps = state.info.get("steps", np.zeros(num_envs, dtype=np.int32))
+        if isinstance(steps, np.ndarray):
+            in_grace_period = steps < GRACE_PERIOD
+        else:
+            in_grace_period = np.full(num_envs, steps < GRACE_PERIOD, dtype=bool)
+
+        # 超时终止
         if self._cfg.max_episode_steps:
-            timeout = state.info["steps"] >= self._cfg.max_episode_steps
+            timeout = steps >= self._cfg.max_episode_steps
             terminated = np.logical_or(terminated, timeout)
-        
-        # ===== 2. Improved fall detection (allows recovery) =====
-        root_pos, root_quat, root_vel = self._extract_root_state(data)
-        
-        # Use configured recovery threshold, default 80 degrees (allows larger tilt)
-        recovery_tilt_threshold = getattr(self._cfg, 'recovery_tilt_threshold', 80.0)
-        tilt_threshold_rad = np.deg2rad(recovery_tilt_threshold)
-        
-        # Calculate projected gravity and detect tilt angle
-        gravity = self._compute_projected_gravity(root_quat)
-        tilt_angle = np.arccos(np.clip(gravity[:, 2], -1.0, 1.0))  # Angle with vertical
-        extreme_tilt = tilt_angle > tilt_threshold_rad  # Using new threshold
-        
-        terminated = np.logical_or(terminated, extreme_tilt)
-        
-        # ===== 3. Base contact with ground (retained) =====
+
+        # 基座接触地面终止（使用传感器）
         try:
             base_contact_value = self._model.get_sensor_value("base_contact", data)
             if base_contact_value.ndim == 0:
@@ -514,11 +523,29 @@ class VBotSection001Env(NpEnv):
                 base_contact = np.full(num_envs, base_contact_value.flatten()[0] > 0.01, dtype=bool)
             else:
                 base_contact = (base_contact_value > 0.01).flatten()[:num_envs]
-            terminated = np.logical_or(terminated, base_contact)
         except Exception as e:
-            # Cannot read sensor, skip this termination condition
-            pass
-        
+            print(f"[Warning] 无法读取base_contact传感器: {e}")
+            base_contact = np.zeros(num_envs, dtype=bool)
+        terminated = np.logical_or(terminated, base_contact)
+
+        # 姿态/越界检测
+        try:
+            root_pos, root_quat, _ = self._extract_root_state(data)
+            recovery_tilt_threshold = getattr(self._cfg, "recovery_tilt_threshold", 80.0)
+            tilt_threshold_rad = np.deg2rad(recovery_tilt_threshold)
+            gravity = self._compute_projected_gravity(root_quat)
+            tilt_angle = np.arccos(np.clip(gravity[:, 2], -1.0, 1.0))
+            extreme_tilt = tilt_angle > tilt_threshold_rad
+            out_of_bounds = self._detect_out_of_bounds(root_pos)
+        except Exception:
+            extreme_tilt = np.zeros(num_envs, dtype=bool)
+            out_of_bounds = np.zeros(num_envs, dtype=bool)
+
+        terminated = np.logical_or(terminated, extreme_tilt | out_of_bounds)
+
+        # 在保护期内，忽略所有终止条件
+        terminated = np.where(in_grace_period, False, terminated)
+
         return state.replace(terminated=terminated)
 
     def _detect_fall(self, root_quat: np.ndarray, foot_contacts: np.ndarray) -> np.ndarray:
@@ -695,6 +722,14 @@ class VBotSection001Env(NpEnv):
         position_error = target_position - robot_position  # Vector from robot to target
         distance_to_target = np.linalg.norm(position_error, axis=1)
 
+        # 朝向对齐奖励：鼓励机器人先转向目标方向
+        heading_to_target = np.arctan2(position_error[:, 1], position_error[:, 0])
+        robot_heading = self._get_heading_from_quat(root_quat)
+        heading_alignment = heading_to_target - robot_heading
+        heading_alignment = np.where(heading_alignment > np.pi, heading_alignment - 2*np.pi, heading_alignment)
+        heading_alignment = np.where(heading_alignment < -np.pi, heading_alignment + 2*np.pi, heading_alignment)
+        heading_alignment_reward = np.exp(-np.abs(heading_alignment) / 0.5) * 0.3
+
         # 距离进度（相对于起始距离）
         if "min_distance" not in info:
             info["min_distance"] = distance_to_target.copy()
@@ -705,21 +740,33 @@ class VBotSection001Env(NpEnv):
         reached = distance_to_target < 0.3
 
         # ===== 3. 密集奖励：距离进步 (Distance Progress) =====
-        # 总距离6米 -> 期望贡献 ~9分 (6.0 * 1.5)
-        # 修正系数：2.0 -> 1.5
+        # 提高系数从 1.5 到 2.0 以鼓励更快速的前进
         distance_progress = info.get("last_distance", distance_to_target) - distance_to_target
         info["last_distance"] = distance_to_target.copy()
 
         # 限制单步奖励防止瞬间跳跃
-        progress_reward = np.clip(distance_progress * 1.5, -0.5, 0.5)
+        progress_reward = np.clip(distance_progress * 2.0, -0.5, 0.5)
 
-        # ===== 4. 稀疏奖励：到达目标 (Arrival Bonus) =====
-        # Only once per episode
-        if "ever_reached" not in info:
-            info["ever_reached"] = np.zeros(num_envs, dtype=bool)
-        ever_reached = info["ever_reached"]
-        arrival_bonus = np.where(reached & (~ever_reached), 10.0, 0.0)
-        info["ever_reached"] = ever_reached | reached
+        # ===== 4. 两阶段稀疏奖励：内圈 + 圆心 =====
+        # 使用已有的 _check_trigger_points 实现两阶段奖励
+        triggered_a, triggered_b = self._check_trigger_points(root_pos)
+        
+        # 阶段一：首次到达内圈围栏 +5.0
+        if "triggered_a" not in info:
+            info["triggered_a"] = np.zeros(num_envs, dtype=bool)
+        first_trigger_a = triggered_a & (~info["triggered_a"])
+        info["triggered_a"] = info["triggered_a"] | triggered_a
+        stage1_bonus = np.where(first_trigger_a, 5.0, 0.0)
+        
+        # 阶段二：首次到达圆心 +5.0
+        if "triggered_b" not in info:
+            info["triggered_b"] = np.zeros(num_envs, dtype=bool)
+        first_trigger_b = triggered_b & (~info["triggered_b"])
+        info["triggered_b"] = info["triggered_b"] | triggered_b
+        stage2_bonus = np.where(first_trigger_b, 5.0, 0.0)
+        
+        # 存活奖励：每步 +0.01（鼓励生存和探索）
+        alive_bonus = 0.01
 
         # ===== 5. Velocity/posture penalties (using configured weights) =====
         # Velocity tracking reward
@@ -812,14 +859,20 @@ class VBotSection001Env(NpEnv):
         cfg: VBotSection001EnvCfg = self._cfg
         num_envs = data.shape[0]
 
-        # ===== 极坐标随机生成在外圈 =====
-        # 每只机器狗在外圈随机分布（半径 3.0 ± 0.1m）
+        # ===== 极坐标随机生成在整个平台范围内 =====
+        # 使用sqrt保证面积均匀分布，确保与目标(圆心)最小距离由配置决定
+        min_spawn_distance = cfg.min_spawn_distance  # 至少距目标(圆心)设定距离(默认2.0m)
+        max_spawn_radius = cfg.boundary_radius - 0.5  # 3.0m，留足安全距离防止出生在地面外
         robot_init_xy = np.zeros((num_envs, 2), dtype=np.float32)
         for i in range(num_envs):
-            theta = np.random.uniform(0, 2 * np.pi)
-            radius = cfg.arena_outer_radius + np.random.uniform(-0.1, 0.1)
-            robot_init_xy[i, 0] = radius * np.cos(theta)
-            robot_init_xy[i, 1] = radius * np.sin(theta)
+            while True:
+                theta = np.random.uniform(0, 2 * np.pi)
+                radius = max_spawn_radius * np.sqrt(np.random.uniform(0, 1))
+                x = radius * np.cos(theta)
+                y = radius * np.sin(theta)
+                if np.sqrt(x**2 + y**2) >= min_spawn_distance:
+                    robot_init_xy[i] = [x, y]
+                    break
 
         # 添加圆心偏移（如果存在）
         robot_init_xy += np.array(cfg.arena_center, dtype=np.float32)
@@ -903,17 +956,24 @@ class VBotSection001Env(NpEnv):
             target_headings = np.random.uniform(yaw_min, yaw_max, size=(num_envs, 1)).astype(np.float32)
         else:
             target_headings = np.zeros((num_envs, 1), dtype=np.float32)
-
         pose_commands = np.concatenate([target_positions, target_headings], axis=1)
 
-        # 归一化base的四元数(DOF 6-9)
+        # 归一化base的四元数(DOF 6-9)，并设置随机yaw
         for env_idx in range(num_envs):
-            quat = dof_pos[env_idx, self._base_quat_start:self._base_quat_end]
-            quat_norm = np.linalg.norm(quat)
-            if quat_norm > 1e-6:
-                dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = quat / quat_norm
-            else:
+            # 随机yaw角 [0, 2π)，roll=0, pitch=0 确保不会侧翻
+            random_yaw = np.random.uniform(0, 2 * np.pi)
+            random_quat = self._euler_to_quat(0.0, 0.0, random_yaw)
+            dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = random_quat
+            
+            # 验证基座四元数的有效性（非零且归一化）
+            base_quat = dof_pos[env_idx, self._base_quat_start:self._base_quat_end]
+            quat_norm = np.linalg.norm(base_quat)
+            if quat_norm < 1e-6:
+                # 无效四元数，重置为单位四元数 [0, 0, 0, 1]
                 dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+            elif abs(quat_norm - 1.0) > 1e-3:
+                # 归一化非单位四元数
+                dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = base_quat / quat_norm
 
             # 归一化箭头的四元数(如果箭头body存在)
             if self._robot_arrow_body is not None:
@@ -1031,8 +1091,10 @@ class VBotSection001Env(NpEnv):
             ],
             axis=-1,
         )
-        print(f"obs.shape:{obs.shape}")
         assert obs.shape == (num_envs, 54)  # 54维
+        
+        # 防止 NaN/Inf 传播到神经网络导致 CUDA 崩溃
+        obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
         info = {
             "pose_commands": pose_commands,
@@ -1041,7 +1103,20 @@ class VBotSection001Env(NpEnv):
             "filtered_actions": np.zeros((num_envs, self._num_action), dtype=np.float32),
             "ever_reached": np.zeros(num_envs, dtype=bool),
             "min_distance": distance_to_target.copy(),
+            "steps": np.zeros(num_envs, dtype=np.int32),  # For grace period
+            "last_distance": distance_to_target.copy(),  # For progress reward
+            "triggered_a": np.zeros(num_envs, dtype=bool),  # Two-stage reward tracking
+            "triggered_b": np.zeros(num_envs, dtype=bool),  # Two-stage reward tracking
         }
+
+        # === 调试：打印出生状态 ===
+        print(f"[RESET] robot_init_pos (first 3): {robot_init_pos[:min(3, num_envs)]}")
+        print(f"[RESET] robot z-height after reset: {root_pos[:min(3, num_envs), 2]}")
+        try:
+            bc = self._model.get_sensor_value("base_contact", data)
+            print(f"[RESET] base_contact at reset: {bc.flatten()[:min(3, num_envs)]}")
+        except Exception:
+            pass
 
         return obs, info
 

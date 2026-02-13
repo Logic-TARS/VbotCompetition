@@ -99,6 +99,7 @@ class Asset:
     body_name = "base"
     foot_names = ["FR", "FL", "RR", "RL"]
     terminate_after_contacts_on = ["collision_middle_box", "collision_head_box"]
+    ground_name = "ground"  # 地面几何体名称（用于接触检测）
     ground_subtree = "C_"  # 地形根节点，用于subtree接触检测
 
 @dataclass
@@ -403,6 +404,7 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
     # ===== New: Zero-velocity trap recovery parameters =====
     force_initial_motion: bool = True              # Force initial velocity
     recovery_tilt_threshold: float = 80.0          # Recovery tilt angle threshold (degrees)
+    min_spawn_distance: float = 2.8  # 机器人生成时距离目标(圆心)的最小距离
 
     @dataclass
     class InitState:
