@@ -369,7 +369,7 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
     arena_inner_radius: float = 1.5  # 内圈半径
     boundary_radius: float = 3.5  # 物理边界半径
     arena_center: list = field(default_factory=lambda: [0.0, 0.0])  # 圆心坐标
-    min_spawn_distance: float = 2.0  # 机器人生成时距离目标(圆心)的最小距离
+    min_spawn_distance: float = 2.8  # 机器人生成时距离目标(圆心)的最小距离
 
     @dataclass
     class InitState:
