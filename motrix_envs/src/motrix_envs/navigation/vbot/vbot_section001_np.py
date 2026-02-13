@@ -548,6 +548,20 @@ class VBotSection001Env(NpEnv):
         # 在保护期内，忽略所有终止条件
         terminated = np.where(in_grace_period, False, terminated)
 
+        # === 调试：打印终止信息 ===
+        if np.any(terminated):
+            idx = np.where(terminated)[0]
+            print(f"[TERM] step={steps[idx[0]]}")
+            print(f"  base_contact={base_contact[idx[0]]}")
+            print(f"  attitude_fail={attitude_fail[idx[0]]}")
+            print(f"  out_of_bounds={out_of_bounds[idx[0]]}")
+            print(f"  in_grace_period={in_grace_period[idx[0]]}")
+            try:
+                root_pos_debug, _, _ = self._extract_root_state(data)
+                print(f"  robot_pos={root_pos_debug[idx[0]]}")
+            except Exception:
+                pass
+
         return state.replace(terminated=terminated)
 
     def _detect_fall(self, root_quat: np.ndarray, foot_contacts: np.ndarray) -> np.ndarray:
@@ -721,6 +735,14 @@ class VBotSection001Env(NpEnv):
         position_error = target_position - robot_position
         distance_to_target = np.linalg.norm(position_error, axis=1)
 
+        # 朝向对齐奖励：鼓励机器人先转向目标方向
+        heading_to_target = np.arctan2(position_error[:, 1], position_error[:, 0])
+        robot_heading = self._get_heading_from_quat(root_quat)
+        heading_alignment = heading_to_target - robot_heading
+        heading_alignment = np.where(heading_alignment > np.pi, heading_alignment - 2*np.pi, heading_alignment)
+        heading_alignment = np.where(heading_alignment < -np.pi, heading_alignment + 2*np.pi, heading_alignment)
+        heading_alignment_reward = np.exp(-np.abs(heading_alignment) / 0.5) * 0.3
+
         # 距离进度（相对于起始距离）
         if "min_distance" not in info:
             info["min_distance"] = distance_to_target.copy()
@@ -785,6 +807,7 @@ class VBotSection001Env(NpEnv):
         # - stage1_bonus: 首次到达内圈 +5.0
         # - stage2_bonus: 首次到达圆心 +5.0
         # - alive_bonus: 存活奖励 +0.01/step
+        # - heading_alignment_reward: 朝向对齐奖励
         # - velocity_reward: 速度跟踪
         # - penalties: 姿态、动作平滑、能量
 
@@ -793,6 +816,7 @@ class VBotSection001Env(NpEnv):
             + stage1_bonus              # 内圈奖励（稀疏）
             + stage2_bonus              # 圆心奖励（稀疏）
             + alive_bonus               # 存活奖励
+            + heading_alignment_reward  # 朝向对齐奖励
             + velocity_reward           # 速度跟踪
             - orientation_penalty       # 姿态惩罚
             - action_rate_penalty       # 动作平滑
@@ -815,14 +839,20 @@ class VBotSection001Env(NpEnv):
         cfg: VBotSection001EnvCfg = self._cfg
         num_envs = data.shape[0]
 
-        # ===== 极坐标随机生成在外圈 =====
-        # 每只机器狗在外圈随机分布（半径 3.0 ± 0.1m）
+        # ===== 极坐标随机生成在整个平台范围内 =====
+        # 使用sqrt保证面积均匀分布，确保与目标(圆心)最小距离1.0m
+        min_spawn_distance = 1.0  # 至少距目标(圆心)1米
+        max_spawn_radius = cfg.boundary_radius - 0.5  # 3.0m，留足安全距离防止出生在地面外
         robot_init_xy = np.zeros((num_envs, 2), dtype=np.float32)
         for i in range(num_envs):
-            theta = np.random.uniform(0, 2 * np.pi)
-            radius = cfg.arena_outer_radius + np.random.uniform(-0.1, 0.1)
-            robot_init_xy[i, 0] = radius * np.cos(theta)
-            robot_init_xy[i, 1] = radius * np.sin(theta)
+            while True:
+                theta = np.random.uniform(0, 2 * np.pi)
+                radius = max_spawn_radius * np.sqrt(np.random.uniform(0, 1))
+                x = radius * np.cos(theta)
+                y = radius * np.sin(theta)
+                if np.sqrt(x**2 + y**2) >= min_spawn_distance:
+                    robot_init_xy[i] = [x, y]
+                    break
 
         # 添加圆心偏移（如果存在）
         robot_init_xy += np.array(cfg.arena_center, dtype=np.float32)
@@ -848,14 +878,12 @@ class VBotSection001Env(NpEnv):
         target_headings = np.zeros((num_envs, 1), dtype=np.float32)
         pose_commands = np.concatenate([target_positions, target_headings], axis=1)
 
-        # 归一化base的四元数(DOF 6-9)
+        # 归一化base的四元数(DOF 6-9)，并设置随机yaw
         for env_idx in range(num_envs):
-            quat = dof_pos[env_idx, self._base_quat_start:self._base_quat_end]
-            quat_norm = np.linalg.norm(quat)
-            if quat_norm > 1e-6:
-                dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = quat / quat_norm
-            else:
-                dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+            # 随机yaw角 [0, 2π)，roll=0, pitch=0 确保不会侧翻
+            random_yaw = np.random.uniform(0, 2 * np.pi)
+            random_quat = self._euler_to_quat(0.0, 0.0, random_yaw)
+            dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = random_quat
 
             # 归一化箭头的四元数(如果箭头body存在)
             if self._robot_arrow_body is not None:
@@ -987,6 +1015,15 @@ class VBotSection001Env(NpEnv):
             "triggered_a": np.zeros(num_envs, dtype=bool),  # Two-stage reward tracking
             "triggered_b": np.zeros(num_envs, dtype=bool),  # Two-stage reward tracking
         }
+
+        # === 调试：打印出生状态 ===
+        print(f"[RESET] robot_init_pos (first 3): {robot_init_pos[:min(3, num_envs)]}")
+        print(f"[RESET] robot z-height after reset: {root_pos[:min(3, num_envs), 2]}")
+        try:
+            bc = self._model.get_sensor_value("base_contact", data)
+            print(f"[RESET] base_contact at reset: {bc.flatten()[:min(3, num_envs)]}")
+        except Exception:
+            pass
 
         return obs, info
 
