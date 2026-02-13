@@ -81,6 +81,9 @@ class VBotNavSection1Env(NpEnv):
         """Initialize buffers and parameters"""
         cfg = self._cfg
         self.default_angles = np.zeros(self._num_action, dtype=np.float32)
+        
+        # Default waypoint distance for progress tracking
+        self.DEFAULT_WAYPOINT_DISTANCE = 10.0
 
         # Normalization coefficients
         self.commands_scale = np.array(
@@ -211,7 +214,7 @@ class VBotNavSection1Env(NpEnv):
         heading_diff = np.where(heading_diff < -np.pi, heading_diff + 2*np.pi, heading_diff)
 
         # Reached target flag
-        position_threshold = 1.5  # Use finish_zone_radius
+        position_threshold = self.finish_zone_radius
         reached_all = distance_to_target < position_threshold
 
         # Compute desired velocity commands (simple P controller)
@@ -367,9 +370,15 @@ class VBotNavSection1Env(NpEnv):
         self.finish_triggered |= newly_triggered_finish
         
         # Start celebration timer when finish is first triggered
+        time_elapsed_value = info.get("time_elapsed", 0.0)
+        if isinstance(time_elapsed_value, (int, float)):
+            time_elapsed_array = np.full(self._num_envs, time_elapsed_value, dtype=np.float32)
+        else:
+            time_elapsed_array = time_elapsed_value
+            
         for env_id in np.where(newly_triggered_finish)[0]:
             if self.celebration_start_time[env_id] < 0:
-                self.celebration_start_time[env_id] = info.get("time_elapsed", 0.0)
+                self.celebration_start_time[env_id] = time_elapsed_array[env_id] if hasattr(time_elapsed_array, '__getitem__') else time_elapsed_value
                 print(f"[ENV {env_id}] Finish zone reached! +20 points. Start celebration.")
 
     def _compute_reward(self, data: mtx.Data, info: dict, velocity_commands, root_pos, base_lin_vel):
@@ -408,13 +417,13 @@ class VBotNavSection1Env(NpEnv):
             
             # Progress reward based on distance reduction
             current_dist = np.linalg.norm(robot_pos[env_id] - target_pos)
-            last_dist = info.get("last_waypoint_distance", np.full(n_envs, 10.0))[env_id]
+            last_dist = info.get("last_waypoint_distance", np.full(n_envs, self.DEFAULT_WAYPOINT_DISTANCE))[env_id]
             progress = last_dist - current_dist
             reward[env_id] += np.clip(progress * 0.5, -0.1, 0.5)  # Dense progress reward
             
             # Update last distance
             if "last_waypoint_distance" not in info:
-                info["last_waypoint_distance"] = np.full(n_envs, 10.0, dtype=np.float32)
+                info["last_waypoint_distance"] = np.full(n_envs, self.DEFAULT_WAYPOINT_DISTANCE, dtype=np.float32)
             info["last_waypoint_distance"][env_id] = current_dist
         
         # 3. Sparse rewards for triggers
@@ -442,9 +451,12 @@ class VBotNavSection1Env(NpEnv):
         info["finish_rewarded"] |= newly_triggered_finish
         
         # 4. Celebration bonus (+2 for staying still at finish for celebration_duration)
-        time_elapsed = info.get("time_elapsed", 0.0)
-        if isinstance(time_elapsed, (int, float)):
-            time_elapsed = np.full(n_envs, time_elapsed, dtype=np.float32)
+        time_elapsed_value = info.get("time_elapsed", 0.0)
+        # Ensure time_elapsed is an array for consistent indexing
+        if isinstance(time_elapsed_value, (int, float)):
+            time_elapsed = np.full(n_envs, time_elapsed_value, dtype=np.float32)
+        else:
+            time_elapsed = time_elapsed_value
         
         for env_id in range(n_envs):
             if self.finish_triggered[env_id] and not self.celebration_completed[env_id]:
@@ -673,8 +685,8 @@ class VBotNavSection1Env(NpEnv):
         state.info = {
             "current_actions": np.zeros((n_envs, self._num_action), dtype=np.float32),
             "steps": np.zeros(n_envs, dtype=np.int32),
-            "last_waypoint_distance": np.full(n_envs, 10.0, dtype=np.float32),
-            "time_elapsed": 0.0,
+            "last_waypoint_distance": np.full(n_envs, self.DEFAULT_WAYPOINT_DISTANCE, dtype=np.float32),
+            "time_elapsed": np.zeros(n_envs, dtype=np.float32),  # Store as array for consistency
         }
         
         # Compute initial observation
@@ -712,6 +724,9 @@ class VBotNavSection1Env(NpEnv):
         state = self._compute_observation(data, state)
         
         # Update time elapsed (approximate, assuming constant dt)
-        state.info["time_elapsed"] = state.info.get("time_elapsed", 0.0) + self._cfg.sim_dt
+        current_time = state.info.get("time_elapsed", np.zeros(data.shape[0], dtype=np.float32))
+        if isinstance(current_time, (int, float)):
+            current_time = np.full(data.shape[0], current_time, dtype=np.float32)
+        state.info["time_elapsed"] = current_time + self._cfg.sim_dt
         
         return state
