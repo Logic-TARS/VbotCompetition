@@ -458,6 +458,9 @@ class VBotSection001Env(NpEnv):
             axis=-1,
         )
         assert obs.shape == (data.shape[0], 54)  # 54维
+        
+        # 防止 NaN/Inf 传播到神经网络导致 CUDA 崩溃
+        obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
         # 更新目标标记和箭头
         self._update_target_marker(data, pose_commands)
@@ -840,8 +843,8 @@ class VBotSection001Env(NpEnv):
         num_envs = data.shape[0]
 
         # ===== 极坐标随机生成在整个平台范围内 =====
-        # 使用sqrt保证面积均匀分布，确保与目标(圆心)最小距离1.0m
-        min_spawn_distance = 1.0  # 至少距目标(圆心)1米
+        # 使用sqrt保证面积均匀分布，确保与目标(圆心)最小距离由配置决定
+        min_spawn_distance = cfg.min_spawn_distance  # 至少距目标(圆心)设定距离(默认2.0m)
         max_spawn_radius = cfg.boundary_radius - 0.5  # 3.0m，留足安全距离防止出生在地面外
         robot_init_xy = np.zeros((num_envs, 2), dtype=np.float32)
         for i in range(num_envs):
@@ -884,6 +887,16 @@ class VBotSection001Env(NpEnv):
             random_yaw = np.random.uniform(0, 2 * np.pi)
             random_quat = self._euler_to_quat(0.0, 0.0, random_yaw)
             dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = random_quat
+            
+            # 验证基座四元数的有效性（非零且归一化）
+            base_quat = dof_pos[env_idx, self._base_quat_start:self._base_quat_end]
+            quat_norm = np.linalg.norm(base_quat)
+            if quat_norm < 1e-6:
+                # 无效四元数，重置为单位四元数 [0, 0, 0, 1]
+                dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+            elif abs(quat_norm - 1.0) > 1e-3:
+                # 归一化非单位四元数
+                dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = base_quat / quat_norm
 
             # 归一化箭头的四元数(如果箭头body存在)
             if self._robot_arrow_body is not None:
@@ -1002,6 +1015,9 @@ class VBotSection001Env(NpEnv):
             axis=-1,
         )
         assert obs.shape == (num_envs, 54)  # 54维
+        
+        # 防止 NaN/Inf 传播到神经网络导致 CUDA 崩溃
+        obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
         info = {
             "pose_commands": pose_commands,
