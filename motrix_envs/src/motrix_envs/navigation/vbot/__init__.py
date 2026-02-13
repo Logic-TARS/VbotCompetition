@@ -15,3 +15,5 @@
 
 from .vbot_section001_np import VBotSection001Env  # noqa: F401
 from .cfg import VBotSection001EnvCfg  # noqa: F401
+from .vbot_nav_section1_np import VBotNavSection1Env  # noqa: F401
+from .cfg import VBotNavSection1EnvCfg  # noqa: F401

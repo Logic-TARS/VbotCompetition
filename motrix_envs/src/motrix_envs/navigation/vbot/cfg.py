@@ -411,3 +411,83 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
     init_state: InitState = field(default_factory=InitState)
     commands: Commands = field(default_factory=Commands)
     control_config: ControlConfig = field(default_factory=ControlConfig)
+
+
+@registry.envcfg("vbot_nav_section1")
+@dataclass
+class VBotNavSection1EnvCfg(VBotStairsEnvCfg):
+    """VBot Navigation Section 1 Competition Environment - Obstacle Navigation with Smileys and Hongbaos"""
+    model_file: str = os.path.dirname(__file__) + "/xmls/scene_section01.xml"
+    max_episode_seconds: float = 70.0  # 70 seconds to explore full course with bonuses
+    max_episode_steps: int = 7000  # 70s × 100Hz = 7000 steps
+
+    # Competition zone coordinates (based on terrain geometry analysis)
+    # START zone: rear platform at y=-2.5 to -1.5
+    start_zone_center: list = field(default_factory=lambda: [0.0, -2.0])
+    start_zone_radius: float = 1.5  # Random spawn within ±1.5m
+    
+    # 3 Smiley face zones in pit terrain (approximately y=0 to 2)
+    smiley_positions: list = field(default_factory=lambda: [
+        [-2.0, 0.5],   # Left smiley
+        [0.0, 1.0],    # Center smiley
+        [2.0, 0.5],    # Right smiley
+    ])
+    smiley_radius: float = 0.8  # Trigger radius for smiley
+    
+    # 3 Hongbao (red envelope) zones on slope terrain (approximately y=4 to 6)
+    hongbao_positions: list = field(default_factory=lambda: [
+        [-1.5, 4.5],   # Left hongbao
+        [0.0, 5.0],    # Center hongbao  
+        [1.5, 4.5],    # Right hongbao
+    ])
+    hongbao_radius: float = 0.6  # Trigger radius for hongbao
+    
+    # 2026 finish zone: front platform at y=7.5 to 8.5
+    finish_zone_center: list = field(default_factory=lambda: [0.0, 8.0])
+    finish_zone_radius: float = 1.5  # Trigger radius for finish
+    
+    # Boundary limits (x=±5m, y=-3.75 to 8.8m)
+    boundary_x_min: float = -5.0
+    boundary_x_max: float = 5.0
+    boundary_y_min: float = -3.5
+    boundary_y_max: float = 9.0
+    
+    # Celebration action bonus parameters
+    celebration_duration: float = 1.0  # Stay still for 1 second at finish
+    celebration_movement_threshold: float = 0.1  # Max movement speed during celebration
+
+    @dataclass
+    class InitState:
+        # Starting position at START zone center
+        pos = [0.0, -2.0, 0.5]
+        
+        # Random spawn within START zone (±1.5m)
+        pos_randomization_range = [-1.5, -1.5, 1.5, 1.5]
+        
+        default_joint_angles = {
+            "FR_hip_joint": -0.0,
+            "FR_thigh_joint": 0.9,
+            "FR_calf_joint": -1.8,
+            "FL_hip_joint": 0.0,
+            "FL_thigh_joint": 0.9,
+            "FL_calf_joint": -1.8,
+            "RR_hip_joint": -0.0,
+            "RR_thigh_joint": 0.9,
+            "RR_calf_joint": -1.8,
+            "RL_hip_joint": 0.0,
+            "RL_thigh_joint": 0.9,
+            "RL_calf_joint": -1.8,
+        }
+
+    @dataclass
+    class Commands:
+        # Target is the finish zone
+        pose_command_range = [0.0, 8.0, 0.0, 0.0, 8.0, 0.0]
+
+    @dataclass
+    class ControlConfig:
+        action_scale = 0.25
+
+    init_state: InitState = field(default_factory=InitState)
+    commands: Commands = field(default_factory=Commands)
+    control_config: ControlConfig = field(default_factory=ControlConfig)
