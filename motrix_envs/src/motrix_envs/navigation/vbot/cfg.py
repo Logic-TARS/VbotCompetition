@@ -88,7 +88,7 @@ class Asset:
 class Sensor:
     base_linvel = "base_linvel"
     base_gyro = "base_gyro"
-    feet = ["FR", "FL", "RR", "RL"]  # 足部接触力传感器名称
+    feet = ["FR_foot_contact", "FL_foot_contact", "RR_foot_contact", "RL_foot_contact"]  # 足部接触力传感器名称
 
 @dataclass
 class RewardConfig:
@@ -369,6 +369,7 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
     arena_inner_radius: float = 1.5  # 内圈半径
     boundary_radius: float = 3.5  # 物理边界半径
     arena_center: list = field(default_factory=lambda: [0.0, 0.0])  # 圆心坐标
+    min_spawn_distance: float = 2.0  # 机器人生成时距离目标(圆心)的最小距离
 
     @dataclass
     class InitState:
