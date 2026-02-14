@@ -334,3 +334,35 @@ class navigation:
         # 网络结构（导航任务适中即可）
         policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
         value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+
+    @rlcfg("vbot_nav_section1")
+    @dataclass
+    class VbotNavSection1PPOConfig(PPOCfg):
+        # ===== Basic Training Parameters =====
+        seed: int = 42
+
+        # 环境数量（根据GPU显存调整）
+        num_envs: int = 512  # 训练环境（16GB GPU适用）
+        play_num_envs: int = 16  # 评估环境
+
+        # 训练步数
+        max_env_steps: int = 8_000_000
+        check_point_interval: int = 50
+
+        # ===== PPO Algorithm Core Parameters =====
+        learning_rate: float = 1e-4
+        rollouts: int = 48
+        learning_epochs: int = 8
+        mini_batches: int = 32
+        discount_factor: float = 0.99
+        lambda_param: float = 0.95
+        grad_norm_clip: float = 1.0
+
+        # ===== PPO Clipping Parameters =====
+        ratio_clip: float = 0.2
+        value_clip: float = 0.2
+        clip_predicted_values: bool = True
+
+        # 网络结构（导航任务适中即可）
+        policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+        value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)

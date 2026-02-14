@@ -36,6 +36,8 @@ class VBotNavSection1Env(NpEnv):
         # Call parent class initialization
         super().__init__(cfg, num_envs=num_envs)
 
+        self._debug_logs = bool(getattr(cfg, "debug_logs", False))
+
         # Initialize robot body and contacts
         self._body = self._model.get_body(cfg.asset.body_name)
         self._init_contact_geometry()
@@ -77,6 +79,14 @@ class VBotNavSection1Env(NpEnv):
         # Initialize buffers
         self._init_buffer()
 
+    @property
+    def observation_space(self):
+        return self._observation_space
+
+    @property
+    def action_space(self):
+        return self._action_space
+
     def _init_buffer(self):
         """Initialize buffers and parameters"""
         cfg = self._cfg
@@ -97,7 +107,6 @@ class VBotNavSection1Env(NpEnv):
                 if name in self._model.actuator_names[i]:
                     self.default_angles[i] = angle
 
-        self._init_dof_pos[-self._num_action:] = self.default_angles
         self.action_filter_alpha = 0.3
 
         # Competition zone coordinates (converted to numpy arrays)
@@ -167,21 +176,53 @@ class VBotNavSection1Env(NpEnv):
         except Exception:
             self._base_contact_geom = None
 
-    def _extract_root_state(self, data: mtx.Data):
+    def _log(self, message: str):
+        if self._debug_logs:
+            print(message)
+
+    def apply_action(self, actions: np.ndarray, state: NpEnvState) -> NpEnvState:
+        """Apply actions to the environment (torque control via position targets)."""
+        state.info["last_dof_vel"] = self._body.get_joint_dof_vel(state.data)
+
+        state.info["last_actions"] = state.info.get(
+            "current_actions",
+            np.zeros((state.data.shape[0], self._num_action), dtype=np.float32),
+        )
+
+        state.info["next_actions"] = actions
+
+        if "filtered_actions" not in state.info:
+            state.info["filtered_actions"] = actions
+        else:
+            state.info["filtered_actions"] = (
+                self.action_filter_alpha * actions
+                + (1.0 - self.action_filter_alpha) * state.info["filtered_actions"]
+            )
+
+        state.info["current_actions"] = state.info["filtered_actions"]
+
+        # Convert actions to target joint positions (position control)
+        target_pos = self.default_angles + state.info["current_actions"] * self._cfg.control_config.action_scale
+        state.data.actuator_ctrls = target_pos
+
+        return state
+
+    def _extract_root_state(self, data: mtx.SceneData):
         """Extract root position, quaternion and velocity"""
-        root_pos = self._model.get_body_pos(self._body, data)
-        root_quat = self._model.get_body_quat(self._body, data)
-        root_vel = self._model.get_body_vel(self._body, data)
+        pose = self._body.get_pose(data)
+        root_pos = pose[:, :3]
+        root_quat = pose[:, 3:7]
+        root_vel = self._model.get_sensor_value(self._cfg.sensor.base_linvel, data)
         return root_pos, root_quat, root_vel
 
-    def _compute_observation(self, data: mtx.Data, state: NpEnvState):
+    def _compute_observation(self, data: mtx.SceneData, state: NpEnvState):
         """Compute observations for the environment"""
         cfg = self._cfg
 
         # Extract state
         root_pos, root_quat, root_vel = self._extract_root_state(data)
-        joint_pos = self._model.get_joint_pos(data)
-        joint_vel = self._model.get_joint_vel(data)
+        joint_pos = self._body.get_joint_dof_pos(data)
+        joint_vel = self._body.get_joint_dof_vel(data)
 
         # Base linear velocity and gyro from sensors
         base_lin_vel = self._model.get_sensor_value(cfg.sensor.base_linvel, data)
@@ -190,8 +231,7 @@ class VBotNavSection1Env(NpEnv):
         # Gravity in base frame
         gravity_world = np.array([0, 0, -1], dtype=np.float32)
         gravity_world = np.tile(gravity_world, (data.shape[0], 1))
-        inv_root_quat = Quaternion.inverse(root_quat)
-        projected_gravity = Quaternion.rotate(inv_root_quat, gravity_world)
+        projected_gravity = Quaternion.rotate_inverse(root_quat, gravity_world)
 
         # Joint angles relative to default
         joint_pos_rel = joint_pos[:, -self._num_action:] - self.default_angles
@@ -251,6 +291,21 @@ class VBotNavSection1Env(NpEnv):
         )
         stop_ready_flag = stop_ready.astype(np.float32)
 
+        smiley_triggered = state.info.get("smiley_triggered")
+        if smiley_triggered is None or smiley_triggered.shape[0] != data.shape[0]:
+            smiley_triggered = np.zeros((data.shape[0], 3), dtype=bool)
+            state.info["smiley_triggered"] = smiley_triggered
+
+        hongbao_triggered = state.info.get("hongbao_triggered")
+        if hongbao_triggered is None or hongbao_triggered.shape[0] != data.shape[0]:
+            hongbao_triggered = np.zeros((data.shape[0], 3), dtype=bool)
+            state.info["hongbao_triggered"] = hongbao_triggered
+
+        finish_triggered = state.info.get("finish_triggered")
+        if finish_triggered is None or finish_triggered.shape[0] != data.shape[0]:
+            finish_triggered = np.zeros((data.shape[0],), dtype=bool)
+            state.info["finish_triggered"] = finish_triggered
+
         # === Competition-specific observations (21 dimensions) ===
         
         # Relative position to each smiley (3 x 2 = 6 dimensions)
@@ -271,15 +326,15 @@ class VBotNavSection1Env(NpEnv):
         
         # Trigger flags (6 dimensions: 3 smileys + 3 hongbaos)
         trigger_flags = np.concatenate([
-            self.smiley_triggered.astype(np.float32),  # (n_envs, 3)
-            self.hongbao_triggered.astype(np.float32),  # (n_envs, 3)
+            smiley_triggered.astype(np.float32),  # (n_envs, 3)
+            hongbao_triggered.astype(np.float32),  # (n_envs, 3)
         ], axis=-1)  # (n_envs, 6)
         
         # Relative position to finish zone (2 dimensions)
         finish_relative_pos = (self.finish_zone_center - root_pos[:, :2]) / 5.0  # (n_envs, 2)
         
         # Finish zone trigger flag (1 dimension)
-        finish_flag = self.finish_triggered.astype(np.float32)[:, np.newaxis]  # (n_envs, 1)
+        finish_flag = finish_triggered.astype(np.float32)[:, np.newaxis]  # (n_envs, 1)
 
         # Concatenate all observations
         obs = np.concatenate(
@@ -315,9 +370,6 @@ class VBotNavSection1Env(NpEnv):
         base_lin_vel_xy = base_lin_vel[:, :2]
         self._update_heading_arrows(data, root_pos, desired_vel_xy, base_lin_vel_xy)
 
-        # Increment step counter
-        state.info["steps"] = state.info.get("steps", np.zeros(data.shape[0], dtype=np.int32)) + 1
-
         # Update trigger states
         self._update_trigger_states(root_pos, state.info)
 
@@ -337,37 +389,59 @@ class VBotNavSection1Env(NpEnv):
     def _update_trigger_states(self, root_pos, info):
         """Update trigger states for smileys, hongbaos, and finish zone"""
         robot_pos = root_pos[:, :2]  # (n_envs, 2)
+        env_ids = info.get("env_ids")
+        smiley_triggered = info.get("smiley_triggered")
+        if smiley_triggered is None or smiley_triggered.shape[0] != robot_pos.shape[0]:
+            smiley_triggered = np.zeros((robot_pos.shape[0], 3), dtype=bool)
+            info["smiley_triggered"] = smiley_triggered
+
+        hongbao_triggered = info.get("hongbao_triggered")
+        if hongbao_triggered is None or hongbao_triggered.shape[0] != robot_pos.shape[0]:
+            hongbao_triggered = np.zeros((robot_pos.shape[0], 3), dtype=bool)
+            info["hongbao_triggered"] = hongbao_triggered
+
+        finish_triggered = info.get("finish_triggered")
+        if finish_triggered is None or finish_triggered.shape[0] != robot_pos.shape[0]:
+            finish_triggered = np.zeros((robot_pos.shape[0],), dtype=bool)
+            info["finish_triggered"] = finish_triggered
+
+        celebration_start_time = info.get("celebration_start_time")
+        if celebration_start_time is None or celebration_start_time.shape[0] != robot_pos.shape[0]:
+            celebration_start_time = np.full(robot_pos.shape[0], -1.0, dtype=np.float32)
+            info["celebration_start_time"] = celebration_start_time
         
         # Check smiley triggers
         for i in range(3):
             smiley_pos = self.smiley_positions[i]  # (2,)
             dist = np.linalg.norm(robot_pos - smiley_pos, axis=-1)  # (n_envs,)
-            newly_triggered = (dist < self.smiley_radius) & ~self.smiley_triggered[:, i]
-            self.smiley_triggered[:, i] |= newly_triggered
+            newly_triggered = (dist < self.smiley_radius) & ~smiley_triggered[:, i]
+            smiley_triggered[:, i] |= newly_triggered
             
             # Log first trigger
             if np.any(newly_triggered):
-                env_ids = np.where(newly_triggered)[0]
-                for env_id in env_ids:
-                    print(f"[ENV {env_id}] Smiley {i+1} triggered! +4 points")
+                local_ids = np.where(newly_triggered)[0]
+                for local_id in local_ids:
+                    env_id = int(env_ids[local_id]) if env_ids is not None else int(local_id)
+                    self._log(f"[ENV {env_id}] Smiley {i+1} triggered! +4 points")
         
         # Check hongbao triggers
         for i in range(3):
             hongbao_pos = self.hongbao_positions[i]  # (2,)
             dist = np.linalg.norm(robot_pos - hongbao_pos, axis=-1)  # (n_envs,)
-            newly_triggered = (dist < self.hongbao_radius) & ~self.hongbao_triggered[:, i]
-            self.hongbao_triggered[:, i] |= newly_triggered
+            newly_triggered = (dist < self.hongbao_radius) & ~hongbao_triggered[:, i]
+            hongbao_triggered[:, i] |= newly_triggered
             
             # Log first trigger
             if np.any(newly_triggered):
-                env_ids = np.where(newly_triggered)[0]
-                for env_id in env_ids:
-                    print(f"[ENV {env_id}] Hongbao {i+1} triggered! +2 points")
+                local_ids = np.where(newly_triggered)[0]
+                for local_id in local_ids:
+                    env_id = int(env_ids[local_id]) if env_ids is not None else int(local_id)
+                    self._log(f"[ENV {env_id}] Hongbao {i+1} triggered! +2 points")
         
         # Check finish zone trigger
         finish_dist = np.linalg.norm(robot_pos - self.finish_zone_center, axis=-1)  # (n_envs,)
-        newly_triggered_finish = (finish_dist < self.finish_zone_radius) & ~self.finish_triggered
-        self.finish_triggered |= newly_triggered_finish
+        newly_triggered_finish = (finish_dist < self.finish_zone_radius) & ~finish_triggered
+        finish_triggered |= newly_triggered_finish
         
         # Start celebration timer when finish is first triggered
         time_elapsed_value = info.get("time_elapsed", 0.0)
@@ -376,15 +450,40 @@ class VBotNavSection1Env(NpEnv):
         else:
             time_elapsed_array = time_elapsed_value
             
-        for env_id in np.where(newly_triggered_finish)[0]:
-            if self.celebration_start_time[env_id] < 0:
-                self.celebration_start_time[env_id] = time_elapsed_array[env_id] if hasattr(time_elapsed_array, '__getitem__') else time_elapsed_value
-                print(f"[ENV {env_id}] Finish zone reached! +20 points. Start celebration.")
+        for local_idx in np.where(newly_triggered_finish)[0]:
+            env_id = int(env_ids[local_idx]) if env_ids is not None else int(local_idx)
+            if celebration_start_time[local_idx] < 0:
+                celebration_start_time[local_idx] = time_elapsed_array[local_idx] if hasattr(time_elapsed_array, '__getitem__') else time_elapsed_value
+                self._log(f"[ENV {env_id}] Finish zone reached! +20 points. Start celebration.")
 
-    def _compute_reward(self, data: mtx.Data, info: dict, velocity_commands, root_pos, base_lin_vel):
+    def _compute_reward(self, data: mtx.SceneData, info: dict, velocity_commands, root_pos, base_lin_vel):
         """Compute rewards for the competition"""
         cfg = self._cfg
         n_envs = data.shape[0]
+        smiley_triggered = info.get("smiley_triggered")
+        if smiley_triggered is None or smiley_triggered.shape[0] != n_envs:
+            smiley_triggered = np.zeros((n_envs, 3), dtype=bool)
+            info["smiley_triggered"] = smiley_triggered
+
+        hongbao_triggered = info.get("hongbao_triggered")
+        if hongbao_triggered is None or hongbao_triggered.shape[0] != n_envs:
+            hongbao_triggered = np.zeros((n_envs, 3), dtype=bool)
+            info["hongbao_triggered"] = hongbao_triggered
+
+        finish_triggered = info.get("finish_triggered")
+        if finish_triggered is None or finish_triggered.shape[0] != n_envs:
+            finish_triggered = np.zeros((n_envs,), dtype=bool)
+            info["finish_triggered"] = finish_triggered
+
+        celebration_start_time = info.get("celebration_start_time")
+        if celebration_start_time is None or celebration_start_time.shape[0] != n_envs:
+            celebration_start_time = np.full(n_envs, -1.0, dtype=np.float32)
+            info["celebration_start_time"] = celebration_start_time
+
+        celebration_completed = info.get("celebration_completed")
+        if celebration_completed is None or celebration_completed.shape[0] != n_envs:
+            celebration_completed = np.zeros(n_envs, dtype=bool)
+            info["celebration_completed"] = celebration_completed
         
         # Base reward components
         reward = np.zeros(n_envs, dtype=np.float32)
@@ -400,17 +499,17 @@ class VBotNavSection1Env(NpEnv):
         # Priority: smiley1 -> smiley2 -> smiley3 -> hongbao1 -> hongbao2 -> hongbao3 -> finish
         for env_id in range(n_envs):
             # Find next waypoint
-            if not self.smiley_triggered[env_id, 0]:
+            if not smiley_triggered[env_id, 0]:
                 target_pos = self.smiley_positions[0]
-            elif not self.smiley_triggered[env_id, 1]:
+            elif not smiley_triggered[env_id, 1]:
                 target_pos = self.smiley_positions[1]
-            elif not self.smiley_triggered[env_id, 2]:
+            elif not smiley_triggered[env_id, 2]:
                 target_pos = self.smiley_positions[2]
-            elif not self.hongbao_triggered[env_id, 0]:
+            elif not hongbao_triggered[env_id, 0]:
                 target_pos = self.hongbao_positions[0]
-            elif not self.hongbao_triggered[env_id, 1]:
+            elif not hongbao_triggered[env_id, 1]:
                 target_pos = self.hongbao_positions[1]
-            elif not self.hongbao_triggered[env_id, 2]:
+            elif not hongbao_triggered[env_id, 2]:
                 target_pos = self.hongbao_positions[2]
             else:
                 target_pos = self.finish_zone_center
@@ -429,7 +528,7 @@ class VBotNavSection1Env(NpEnv):
         # 3. Sparse rewards for triggers
         # Smiley bonuses (first trigger only, +4 each)
         for i in range(3):
-            newly_triggered = self.smiley_triggered[:, i] & ~info.get(f"smiley_{i}_rewarded", np.zeros(n_envs, dtype=bool))
+            newly_triggered = smiley_triggered[:, i] & ~info.get(f"smiley_{i}_rewarded", np.zeros(n_envs, dtype=bool))
             reward += newly_triggered.astype(np.float32) * 4.0
             if f"smiley_{i}_rewarded" not in info:
                 info[f"smiley_{i}_rewarded"] = np.zeros(n_envs, dtype=bool)
@@ -437,14 +536,14 @@ class VBotNavSection1Env(NpEnv):
         
         # Hongbao bonuses (first trigger only, +2 each)
         for i in range(3):
-            newly_triggered = self.hongbao_triggered[:, i] & ~info.get(f"hongbao_{i}_rewarded", np.zeros(n_envs, dtype=bool))
+            newly_triggered = hongbao_triggered[:, i] & ~info.get(f"hongbao_{i}_rewarded", np.zeros(n_envs, dtype=bool))
             reward += newly_triggered.astype(np.float32) * 2.0
             if f"hongbao_{i}_rewarded" not in info:
                 info[f"hongbao_{i}_rewarded"] = np.zeros(n_envs, dtype=bool)
             info[f"hongbao_{i}_rewarded"] |= newly_triggered
         
         # Finish zone bonus (first trigger only, +20)
-        newly_triggered_finish = self.finish_triggered & ~info.get("finish_rewarded", np.zeros(n_envs, dtype=bool))
+        newly_triggered_finish = finish_triggered & ~info.get("finish_rewarded", np.zeros(n_envs, dtype=bool))
         reward += newly_triggered_finish.astype(np.float32) * 20.0
         if "finish_rewarded" not in info:
             info["finish_rewarded"] = np.zeros(n_envs, dtype=bool)
@@ -459,9 +558,9 @@ class VBotNavSection1Env(NpEnv):
             time_elapsed = time_elapsed_value
         
         for env_id in range(n_envs):
-            if self.finish_triggered[env_id] and not self.celebration_completed[env_id]:
-                if self.celebration_start_time[env_id] >= 0:
-                    celebration_time = time_elapsed[env_id] - self.celebration_start_time[env_id]
+            if finish_triggered[env_id] and not celebration_completed[env_id]:
+                if celebration_start_time[env_id] >= 0:
+                    celebration_time = time_elapsed[env_id] - celebration_start_time[env_id]
                     speed = np.linalg.norm(base_lin_vel[env_id, :2])
                     
                     # Check if robot is staying still
@@ -470,17 +569,20 @@ class VBotNavSection1Env(NpEnv):
                             # Award celebration bonus
                             if not info.get("celebration_rewarded", np.zeros(n_envs, dtype=bool))[env_id]:
                                 reward[env_id] += 2.0
-                                self.celebration_completed[env_id] = True
+                                celebration_completed[env_id] = True
                                 if "celebration_rewarded" not in info:
                                     info["celebration_rewarded"] = np.zeros(n_envs, dtype=bool)
                                 info["celebration_rewarded"][env_id] = True
-                                print(f"[ENV {env_id}] Celebration completed! +2 points")
+                                self._log(f"[ENV {env_id}] Celebration completed! +2 points")
                     else:
                         # Reset celebration timer if moving
-                        self.celebration_start_time[env_id] = time_elapsed[env_id]
+                        celebration_start_time[env_id] = time_elapsed[env_id]
+
+        info["celebration_start_time"] = celebration_start_time
+        info["celebration_completed"] = celebration_completed
         
         # 5. Stability penalties (keep robot stable and energy-efficient)
-        root_quat = self._model.get_body_quat(self._body, data)
+        root_quat = self._body.get_pose(data)[:, 3:7]
         qx, qy, qz, qw = root_quat[:, 0], root_quat[:, 1], root_quat[:, 2], root_quat[:, 3]
         sinr_cosp = 2 * (qw * qx + qy * qz)
         cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
@@ -499,8 +601,7 @@ class VBotNavSection1Env(NpEnv):
         reward += action_rate * cfg.reward_config.scales.get("action_rate", -0.01)
         
         # Torque penalty (energy efficiency)
-        actuator_forces = self._model.get_actuator_force(data)
-        torque_penalty = np.sum(np.square(actuator_forces), axis=-1) * cfg.reward_config.scales.get("torques", -1e-5)
+        torque_penalty = np.sum(np.square(data.actuator_ctrls), axis=-1) * cfg.reward_config.scales.get("torques", -1e-5)
         reward += torque_penalty
         
         return reward
@@ -508,26 +609,27 @@ class VBotNavSection1Env(NpEnv):
     def _compute_terminated(self, state: NpEnvState) -> NpEnvState:
         """Compute termination conditions"""
         data = state.data
+        n_envs = data.shape[0]
         
         # Grace period: no termination in first 20 frames
         GRACE_PERIOD = 20
-        steps = state.info.get("steps", np.zeros(self._num_envs, dtype=np.int32))
+        steps = state.info.get("steps", np.zeros(n_envs, dtype=np.int32))
         if isinstance(steps, np.ndarray):
             in_grace_period = steps < GRACE_PERIOD
         else:
-            in_grace_period = np.full(self._num_envs, steps < GRACE_PERIOD, dtype=bool)
+            in_grace_period = np.full(n_envs, steps < GRACE_PERIOD, dtype=bool)
         
         # 1. Base contact with ground (fall detection)
         try:
             base_contact_value = self._model.get_sensor_value("base_contact", data)
             if base_contact_value.ndim == 0:
                 base_contact = np.array([base_contact_value > 0.1], dtype=bool)
-            elif base_contact_value.shape[0] != self._num_envs:
-                base_contact = np.full(self._num_envs, base_contact_value.flatten()[0] > 0.1, dtype=bool)
+            elif base_contact_value.shape[0] != n_envs:
+                base_contact = np.full(n_envs, base_contact_value.flatten()[0] > 0.1, dtype=bool)
             else:
-                base_contact = (base_contact_value > 0.1).flatten()[:self._num_envs]
+                base_contact = (base_contact_value > 0.1).flatten()[:n_envs]
         except Exception as e:
-            base_contact = np.zeros(self._num_envs, dtype=bool)
+            base_contact = np.zeros(n_envs, dtype=bool)
         
         # 2. Attitude failure (roll/pitch > 45 degrees)
         try:
@@ -541,8 +643,8 @@ class VBotNavSection1Env(NpEnv):
             
             attitude_fail = (np.abs(roll) > self.fall_threshold_roll_pitch) | (np.abs(pitch) > self.fall_threshold_roll_pitch)
         except Exception:
-            attitude_fail = np.zeros(self._num_envs, dtype=bool)
-            root_pos = np.zeros((self._num_envs, 3), dtype=np.float32)
+            attitude_fail = np.zeros(n_envs, dtype=bool)
+            root_pos = np.zeros((n_envs, 3), dtype=np.float32)
         
         # 3. Out of bounds detection
         out_of_bounds = (
@@ -568,12 +670,12 @@ class VBotNavSection1Env(NpEnv):
                 reasons.append("attitude_fail")
             if out_of_bounds[env_id]:
                 reasons.append("out_of_bounds")
-            print(f"[TERM] ENV {env_id} terminated: {', '.join(reasons)}")
+            self._log(f"[TERM] ENV {env_id} terminated: {', '.join(reasons)}")
         
         state.terminated = terminated
         return state
 
-    def _update_target_marker(self, data: mtx.Data, pose_commands):
+    def _update_target_marker(self, data: mtx.SceneData, pose_commands):
         """Update target marker position for visualization"""
         n_envs = data.shape[0]
         target_x = pose_commands[:, 0]
@@ -585,7 +687,7 @@ class VBotNavSection1Env(NpEnv):
                 target_x[env_idx], target_y[env_idx], target_z[env_idx]
             ]
 
-    def _update_heading_arrows(self, data: mtx.Data, root_pos, desired_vel_xy, base_lin_vel_xy):
+    def _update_heading_arrows(self, data: mtx.SceneData, root_pos, desired_vel_xy, base_lin_vel_xy):
         """Update heading arrows for visualization"""
         if self._robot_arrow_body is None or self._desired_arrow_body is None:
             return
@@ -638,7 +740,11 @@ class VBotNavSection1Env(NpEnv):
         
         return [qx, qy, qz, qw]
 
-    def reset(self, data: mtx.Data, state: NpEnvState) -> NpEnvState:
+    def reset(
+        self,
+        data: mtx.SceneData,
+        done: np.ndarray = None,
+    ) -> tuple[np.ndarray, dict]:
         """Reset the environment"""
         cfg = self._cfg
         n_envs = data.shape[0]
@@ -663,64 +769,85 @@ class VBotNavSection1Env(NpEnv):
         else:
             spawn_quat = spawn_quat / quat_norms[:, np.newaxis]
         
-        # Set robot positions
+        dof_pos = np.tile(self._init_dof_pos, (n_envs, 1))
+        dof_vel = np.tile(self._init_dof_vel, (n_envs, 1))
+
+        # Set base position and orientation
+        dof_pos[:, 3:6] = np.column_stack([spawn_x, spawn_y, np.full(n_envs, spawn_z, dtype=np.float32)])
+        dof_pos[:, self._base_quat_start:self._base_quat_end] = spawn_quat
+
+        # Normalize base quaternions
         for env_idx in range(n_envs):
-            # Set base position
-            data.dof_pos[env_idx, 3:6] = [spawn_x[env_idx], spawn_y[env_idx], spawn_z]
-            # Set base quaternion
-            data.dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = spawn_quat[env_idx]
-            # Set joint positions
-            data.dof_pos[env_idx, -self._num_action:] = self.default_angles
-            # Set velocities to zero
-            data.dof_vel[env_idx, :] = 0.0
+            quat = dof_pos[env_idx, self._base_quat_start:self._base_quat_end]
+            quat_norm = np.linalg.norm(quat)
+            if quat_norm > 1e-6:
+                dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = quat / quat_norm
+            else:
+                dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+
+        data.reset(self._model)
+        data.set_dof_vel(dof_vel)
+        data.set_dof_pos(dof_pos, self._model)
+        self._model.forward_kinematic(data)
         
-        # Reset trigger flags
-        self.smiley_triggered.fill(False)
-        self.hongbao_triggered.fill(False)
-        self.finish_triggered.fill(False)
-        self.celebration_start_time.fill(-1.0)
-        self.celebration_completed.fill(False)
+        # Reset trigger flags (only when mapping is known)
+        if done is None and n_envs == self._num_envs:
+            self.smiley_triggered.fill(False)
+            self.hongbao_triggered.fill(False)
+            self.finish_triggered.fill(False)
+            self.celebration_start_time.fill(-1.0)
+            self.celebration_completed.fill(False)
+        elif done is not None and done.shape == (self._num_envs,):
+            self.smiley_triggered[done] = False
+            self.hongbao_triggered[done] = False
+            self.finish_triggered[done] = False
+            self.celebration_start_time[done] = -1.0
+            self.celebration_completed[done] = False
         
         # Initialize info dict
-        state.info = {
+        info = {
             "current_actions": np.zeros((n_envs, self._num_action), dtype=np.float32),
             "steps": np.zeros(n_envs, dtype=np.int32),
             "last_waypoint_distance": np.full(n_envs, self.DEFAULT_WAYPOINT_DISTANCE, dtype=np.float32),
             "time_elapsed": np.zeros(n_envs, dtype=np.float32),  # Store as array for consistency
+            "smiley_triggered": np.zeros((n_envs, 3), dtype=bool),
+            "hongbao_triggered": np.zeros((n_envs, 3), dtype=bool),
+            "finish_triggered": np.zeros(n_envs, dtype=bool),
+            "celebration_start_time": np.full(n_envs, -1.0, dtype=np.float32),
+            "celebration_completed": np.zeros(n_envs, dtype=bool),
+            "celebration_rewarded": np.zeros(n_envs, dtype=bool),
+            "finish_rewarded": np.zeros(n_envs, dtype=bool),
+            "smiley_0_rewarded": np.zeros(n_envs, dtype=bool),
+            "smiley_1_rewarded": np.zeros(n_envs, dtype=bool),
+            "smiley_2_rewarded": np.zeros(n_envs, dtype=bool),
+            "hongbao_0_rewarded": np.zeros(n_envs, dtype=bool),
+            "hongbao_1_rewarded": np.zeros(n_envs, dtype=bool),
+            "hongbao_2_rewarded": np.zeros(n_envs, dtype=bool),
         }
+        if done is not None:
+            info["env_ids"] = np.where(done)[0]
         
+        obs = np.zeros((n_envs, self.observation_space.shape[0]), dtype=np.float32)
+        reward = np.zeros((n_envs,), dtype=np.float32)
+        terminated = np.zeros((n_envs,), dtype=bool)
+        truncated = np.zeros((n_envs,), dtype=bool)
+        state = NpEnvState(data=data, obs=obs, reward=reward, terminated=terminated, truncated=truncated, info=info)
+
         # Compute initial observation
-        state.data = data
         state = self._compute_observation(data, state)
-        
+
         # Prevent NaN/Inf
         state.obs = np.nan_to_num(state.obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
         
-        print(f"[RESET] Spawned {n_envs} robots at START zone (x={spawn_x}, y={spawn_y})")
+        self._log(f"[RESET] Spawned {n_envs} robots at START zone (x={spawn_x}, y={spawn_y})")
         
-        return state
+        return state.obs, state.info
 
-    def update_state(self, data: mtx.Data, state: NpEnvState, action: np.ndarray) -> NpEnvState:
+    def update_state(self, state: NpEnvState) -> NpEnvState:
         """Update environment state"""
-        # Store actions in info
-        state.info["next_actions"] = action
-        
-        # Apply action with filtering
-        filtered_action = (
-            self.action_filter_alpha * action + 
-            (1 - self.action_filter_alpha) * state.info["current_actions"]
-        )
-        
-        # Set actuator controls
-        for env_idx in range(data.shape[0]):
-            target_pos = self.default_angles + filtered_action[env_idx] * self._cfg.control_config.action_scale
-            data.ctrl[env_idx, :] = target_pos
-        
-        # Update current actions
-        state.info["current_actions"] = filtered_action
-        
+        data = state.data
+
         # Compute observation and rewards
-        state.data = data
         state = self._compute_observation(data, state)
         
         # Update time elapsed (approximate, assuming constant dt)
