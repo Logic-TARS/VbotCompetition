@@ -34,6 +34,9 @@ _RENDER = flags.DEFINE_bool("render", False, "Render the env")
 _TRAIN_BACKEND = flags.DEFINE_string("train-backend", "jax", "The learning backend. (jax/torch)")
 _SEED = flags.DEFINE_integer("seed", None, "Random seed for reproducibility")
 _RAND_SEED = flags.DEFINE_bool("rand-seed", False, "Generate random seed")
+_CHECKPOINT_INTERVAL = flags.DEFINE_integer(
+    "checkpoint-interval", None, "Checkpoint save interval in timesteps (default: use config value, typically 1000)"
+)
 
 
 def get_train_backend(supports: utils.DeviceSupports):
@@ -64,6 +67,9 @@ def main(argv):
         rl_override["seed"] = None
     elif _SEED.present:
         rl_override["seed"] = _SEED.value
+
+    if _CHECKPOINT_INTERVAL.present:
+        rl_override["check_point_interval"] = _CHECKPOINT_INTERVAL.value
 
     sim_backend = _SIM_BACKEND.value
     train_backend = "jax"

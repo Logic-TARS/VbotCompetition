@@ -461,7 +461,7 @@ class navigation:
         num_envs: int = 2048
         play_num_envs: int = 16
         max_env_steps: int = 1024 * 60_000
-        check_point_interval: int = 1000
+        check_point_interval: int = 500
 
         learning_rate: float = 3e-4
         rollouts: int = 48

@@ -443,6 +443,7 @@ class VBotSection011EnvCfg(VBotStairsEnvCfg):
     model_file: str = os.path.dirname(__file__) + "/xmls/scene_section011.xml"
     max_episode_seconds: float = 40.0  # 拉长一倍：从20秒增加到40秒
     max_episode_steps: int = 4000  # 拉长一倍：从2000步增加到4000步
+    render_spacing: float = 0  # 多环境渲染时不添加间距
     @dataclass
     class InitState:
         # 起始位置：随机化范围内生成

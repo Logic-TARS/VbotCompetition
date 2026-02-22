@@ -298,6 +298,27 @@ class VBotSection011Env(NpEnv):
         heading = np.arctan2(siny_cosp, cosy_cosp)
         return heading
     
+    def _normalize_quaternions_in_dof_pos(self, all_dof_pos: np.ndarray):
+        """归一化dof_pos中所有四元数，防止退化导致set_dof_pos崩溃"""
+        num_envs = all_dof_pos.shape[0]
+        # 基座四元数（index 6-9）
+        quat_indices = [(self._base_quat_start, self._base_quat_end)]
+        # 箭头四元数（如果存在）
+        if self._robot_arrow_body is not None:
+            quat_indices.append((self._robot_arrow_dof_start + 3, self._robot_arrow_dof_end))
+            quat_indices.append((self._desired_arrow_dof_start + 3, self._desired_arrow_dof_end))
+        
+        for start, end in quat_indices:
+            if end <= all_dof_pos.shape[1]:
+                for env_idx in range(num_envs):
+                    q = all_dof_pos[env_idx, start:end]
+                    norm = np.linalg.norm(q)
+                    if norm > 1e-6:
+                        all_dof_pos[env_idx, start:end] = q / norm
+                    else:
+                        all_dof_pos[env_idx, start:end] = [0.0, 0.0, 0.0, 1.0]
+        return all_dof_pos
+
     def _update_target_marker(self, data: mtx.SceneData, pose_commands: np.ndarray):
         """更新目标位置标记的位置和朝向"""
         num_envs = data.shape[0]
@@ -311,6 +332,7 @@ class VBotSection011Env(NpEnv):
                 target_x, target_y, target_yaw
             ]
         
+        all_dof_pos = self._normalize_quaternions_in_dof_pos(all_dof_pos)
         data.set_dof_pos(all_dof_pos, self._model)
         self._model.forward_kinematic(data)
     
@@ -361,6 +383,7 @@ class VBotSection011Env(NpEnv):
                 desired_arrow_pos, desired_arrow_quat
             ])
         
+        all_dof_pos = self._normalize_quaternions_in_dof_pos(all_dof_pos)
         data.set_dof_pos(all_dof_pos, self._model)
         self._model.forward_kinematic(data)
     
@@ -521,20 +544,22 @@ class VBotSection011Env(NpEnv):
         else:
             in_grace_period = np.zeros(n_envs, dtype=bool)
         
-        # 1. 基座接触地面（摔倒检测）
+        # 1. 基座接触地面（摔倒检测）- 使用碰撞查询（与AnymalC一致的正确做法）
         root_pos = self._body.get_pose(data)[:, :3]
         try:
-            base_contact_value = self._model.get_sensor_value("base_contact", data)
-            if base_contact_value.ndim == 0:
-                base_contact = np.array([base_contact_value > 0.01], dtype=bool)
-            elif base_contact_value.shape[0] != n_envs:
-                base_contact = np.full(n_envs, base_contact_value.flatten()[0] > 0.01, dtype=bool)
+            if self.num_termination_check > 0:
+                # 使用几何碰撞查询（可靠）
+                cquerys = self._model.get_contact_query(data)
+                termination_check = cquerys.is_colliding(self.termination_contact)
+                termination_check = termination_check.reshape((n_envs, self.num_termination_check))
+                base_contact = termination_check.any(axis=1)
             else:
-                base_contact = (base_contact_value > 0.01).flatten()[:n_envs]
-        except Exception:
+                base_contact = np.zeros(n_envs, dtype=bool)
+        except Exception as e:
             base_contact = np.zeros(n_envs, dtype=bool)
-        low_height = root_pos[:, 2] < max(0.25, self._cfg.init_state.pos[2] - 0.15)
-        base_contact = base_contact & low_height
+        
+        # 基座碰到地面即判定摔倒（碰撞查询只检测collision_middle_box和collision_head_box与地面的碰撞）
+        fall_detected = base_contact
         
         # 2. 姿态失败（roll/pitch > 45度）
         try:
@@ -558,12 +583,12 @@ class VBotSection011Env(NpEnv):
         )
         
         # 合并终止条件（宽限期内忽略）
-        terminated = (base_contact | attitude_fail | out_of_bounds) & ~in_grace_period
-        
+        terminated = (fall_detected | attitude_fail | out_of_bounds) & ~in_grace_period
+
         # 应用终止惩罚
         penalty = np.where(terminated, -10.0, 0.0)
         state.reward += penalty
-        
+
         state.terminated = terminated
         return state
     
