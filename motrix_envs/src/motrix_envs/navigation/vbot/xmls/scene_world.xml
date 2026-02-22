@@ -20,28 +20,35 @@
     <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
     
     <!-- 加载三段地形模型 -->
-    <model name="section01C" file="../world_0122/section01/0120_C_section01.xml"/>
-    <model name="section02C" file="../world_0122/section02/0120_C_section02.xml"/>
-    <model name="section03C" file="../world_0122/section03/0122_C_section03.xml"/>
+    <model name="section01C" file="0131_C_section01.xml"/>
+    <model name="section02C" file="0131_C_section02_hotfix1.xml"/>
+    <model name="section03C" file="0126_C_section03.xml"/>
+    <model name="section00V" file="0202_V_section01.xml"/>
+    <model name="section01V" file="0202_V_section02.xml"/>
+    <model name="section02V" file="0202_V_section03.xml"/>
   </asset>
 
   <worldbody>
     <light pos="0 15 10" dir="0 0 -1" directional="true" />
     
     <!-- 加载三段地形 -->
-    <attach model="section01C" prefix="0"/>
-    <attach model="section02C" prefix="1"/>
-    <attach model="section03C" prefix="2"/>
+    <attach model="section01C" prefix="C1"/>
+    <attach model="section02C" prefix="C2"/>
+    <attach model="section03C" prefix="C3"/>
+    <attach model="section00V" prefix="V1"/>
+    <attach model="section01V" prefix="V2"/>
+    <attach model="section02V" prefix="V3"/>
     
     <!-- 地面用于足部接触检测 -->
     <geom name="ground" pos="0 15 -10" size="100 100 0.01" type="plane" rgba="0 0 0 0" contype="1" conaffinity="1"/>
   </worldbody>
 
   <sensor>
-    <contact name="FR_foot_contact" geom2="FR" geom1="ground" data="normal" num="1" />
-    <contact name="FL_foot_contact" geom2="FL" geom1="ground" data="normal" num="1" />
-    <contact name="RR_foot_contact" geom2="RR" geom1="ground" data="normal" num="1" />
-    <contact name="RL_foot_contact" geom2="RL" geom1="ground" data="normal" num="1" />
+    <contact name="FR_foot_contact" subtree1="FR" subtree2="C1" data="normal" num="1" />
+    <contact name="FL_foot_contact" subtree1="FL" subtree2="C1" data="normal" num="1" />
+    <contact name="RR_foot_contact" subtree1="RR" subtree2="C1" data="normal" num="1" />
+    <contact name="RL_foot_contact" subtree1="RL" subtree2="C1" data="normal" num="1" />
+    <contact name="base_contact" subtree1="base" subtree2="C1" data="normal" num="1" />
   </sensor>
 
 </mujoco>

@@ -19,8 +19,7 @@
   <asset>
     <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
     
-    <!-- 视觉模型 + 碰撞模型 -->
-    <model name="section01V" file="0202_V_section01.xml"/>
+    <!-- 加载section01地形模型 - 使用0126版本 -->
     <model name="section01C" file="0126_C_section01.xml"/>
   </asset>
 
@@ -28,8 +27,7 @@
     <light pos="0 0 10" dir="0 0 -1" directional="true" />
     
     <!-- 加载section01地形 -->
-    <attach model="section01V" prefix="V_"/>
-    <attach model="section01C" prefix="C_"/>   
+    <attach model="section01C" prefix="0"/>   
   </worldbody>
 
 
@@ -39,12 +37,12 @@
     <contact name="FL_foot_contact" body1="FL_foot" body2="0B_Abianjie" data="normal" num="1" />
     <contact name="RR_foot_contact" body1="RR_foot" body2="0B_Abianjie" data="normal" num="1" />
     <contact name="RL_foot_contact" body1="RL_foot" body2="0B_Abianjie" data="normal" num="1" /> -->
-    <contact name="FR_foot_contact" subtree1="FR_foot" subtree2="C_ground_root" data="normal" num="1" />
-    <contact name="FL_foot_contact" subtree1="FL_foot" subtree2="C_ground_root" data="normal" num="1" />
-    <contact name="RR_foot_contact" subtree1="RR_foot" subtree2="C_ground_root" data="normal" num="1" />
-    <contact name="RL_foot_contact" subtree1="RL_foot" subtree2="C_ground_root" data="normal" num="1" />
+    <contact name="FR_foot_contact" subtree1="FR_foot" subtree2="0ground_root" data="normal" num="1" />
+    <contact name="FL_foot_contact" subtree1="FL_foot" subtree2="0ground_root" data="normal" num="1" />
+    <contact name="RR_foot_contact" subtree1="RR_foot" subtree2="0ground_root" data="normal" num="1" />
+    <contact name="RL_foot_contact" subtree1="RL_foot" subtree2="0ground_root" data="normal" num="1" />
     <!-- 基座碰撞检测传感器：检测基座与地形的碰撞 -->
-    <contact name="base_contact" subtree1="base" subtree2="C_ground_root" data="normal" num="1" />
+    <contact name="base_contact" subtree1="base" subtree2="0ground_root" data="normal" num="1" />
   </sensor>
 
 </mujoco>

@@ -40,8 +40,8 @@ class ControlConfig:
 @dataclass
 class InitState:
     # the initial position of the robot in the world frame
-    pos = [0.0, 0.0, 0.5]
-
+    pos = [0.0, 0.0, 0.5]  
+    
     # 位置随机化范围 [x_min, y_min, x_max, y_max]
     pos_randomization_range = [-10.0, -10.0, 10.0, 10.0]  # 在ground上随机分散20m x 20m范围
 
@@ -81,14 +81,13 @@ class Asset:
     body_name = "base"
     foot_names = ["FR", "FL", "RR", "RL"]
     terminate_after_contacts_on = ["collision_middle_box", "collision_head_box"]
-    ground_name = "ground"  # 地面几何体名称（用于接触检测）
     ground_subtree = "C_"  # 地形根节点，用于subtree接触检测
-
+   
 @dataclass
 class Sensor:
     base_linvel = "base_linvel"
     base_gyro = "base_gyro"
-    feet = ["FR_foot_contact", "FL_foot_contact", "RR_foot_contact", "RL_foot_contact"]  # 足部接触力传感器名称
+    feet = ["FR", "FL", "RR", "RL"]  # 足部接触力传感器名称
 
 @dataclass
 class RewardConfig:
@@ -99,7 +98,7 @@ class RewardConfig:
             "fine_position_tracking": 2.0,  # 精细位置奖励（提高10倍）
             "heading_tracking": 1.0,        # 朝向跟踪奖励（新增）
             "forward_velocity": 0.5,        # 前进速度奖励（鼓励朝目标移动）
-
+            
             # ===== Locomotion稳定性奖励（保持但降低权重） =====
             "orientation": -0.05,           # 姿态稳定（降低权重）
             "lin_vel_z": -0.5,              # 垂直速度惩罚
@@ -108,7 +107,7 @@ class RewardConfig:
             "dof_vel": -5e-5,               # 关节速度惩罚
             "dof_acc": -2.5e-7,             # 关节加速度惩罚
             "action_rate": -0.01,           # 动作变化率惩罚
-
+            
             # ===== 终止惩罚 =====
             "termination": -200.0,          # 终止惩罚
         }
@@ -117,7 +116,6 @@ class RewardConfig:
 @registry.envcfg("vbot_navigation_flat")
 @dataclass
 class VBotEnvCfg(EnvCfg):
-    render_spacing: float = 0.0
     model_file: str = model_file
     reset_noise_scale: float = 0.01
     max_episode_seconds: float = 10
@@ -144,11 +142,11 @@ class VBotStairsEnvCfg(VBotEnvCfg):
     model_file: str = os.path.dirname(__file__) + "/xmls/scene_stairs.xml"
     max_episode_seconds: float = 20.0  # 增加到20秒，给更多时间学习转向
     max_episode_steps: int = 2000
-
+    
     @dataclass
     class ControlConfig:
         action_scale = 0.25  # 楼梯navigation使用0.2，足够转向但比平地更谨慎
-
+    
     control_config: ControlConfig = field(default_factory=ControlConfig)
 
 
@@ -175,12 +173,197 @@ class VBotSection01EnvCfg(VBotStairsEnvCfg):
     model_file: str = os.path.dirname(__file__) + "/xmls/scene_section01.xml"
     max_episode_seconds: float = 40.0  # 拉长一倍：从20秒增加到40秒
     max_episode_steps: int = 4000  # 拉长一倍：从2000步增加到4000步
-
+    
     @dataclass
     class InitState:
         # 起始位置：随机化范围内生成
         pos = [0.0, -2.4, 0.5]  # 中心位置
+        
+        pos_randomization_range = [-0.5, -0.5, 0.5, 0.5]  # X±0.5m, Y±0.5m随机
+        
+        default_joint_angles = {
+            "FR_hip_joint": -0.0,
+            "FR_thigh_joint": 0.9,
+            "FR_calf_joint": -1.8,
+            "FL_hip_joint": 0.0,
+            "FL_thigh_joint": 0.9,
+            "FL_calf_joint": -1.8,
+            "RR_hip_joint": -0.0,
+            "RR_thigh_joint": 0.9,
+            "RR_calf_joint": -1.8,
+            "RL_hip_joint": 0.0,
+            "RL_thigh_joint": 0.9,
+            "RL_calf_joint": -1.8,
+        }
+    
+    @dataclass
+    class Commands:
+        # 目标位置：缩短距离，固定目标点
+        # 起始位置Y=-2.4, 目标Y=3.6, 距离=6米（与vbot_np相近）
+        # pose_command_range = [0.0, 3.6, 0.0, 0.0, 3.6, 0.0]
+        
+        # 原始配置（已注释）：
+        # 目标位置：固定在终止角范围远端（完全无随机化）
+        # 固定目标点: X=0, Y=10.2, Z=2 (Z通过XML控制)
+        # 起始位置Y=-2.4, 目标Y=10.2, 距离=12.6米
+        pose_command_range = [0.0, 10.2, 0.0, 0.0, 10.2, 0.0]
+    
+    @dataclass
+    class ControlConfig:
+        action_scale = 0.25
+    
+    init_state: InitState = field(default_factory=InitState)
+    commands: Commands = field(default_factory=Commands)
+    control_config: ControlConfig = field(default_factory=ControlConfig)
 
+
+@registry.envcfg("vbot_navigation_section02")
+@dataclass
+class VBotSection02EnvCfg(VBotStairsEnvCfg):
+    """VBot Section02单独训练配置 - 中间楼梯地形"""
+    model_file: str = os.path.dirname(__file__) + "/xmls/scene_section02.xml"
+    max_episode_seconds: float = 60.0  # Section02较复杂，需要更多时间
+    max_episode_steps: int = 6000
+    
+    @dataclass
+    class InitState:
+        # 起始位置：section02的起始位置（继承自locomotion）
+        # pos = [-2.5, 8.5, 1.8]
+        # pos = [-2.5, 8.5, 1.8]
+        pos = [-2.5, 12.0, 1.8]  # Y坐标对应section02的起点，高度1.8m
+        # pos = [-2.5, 15.0, 3.3]  # Y坐标对应section02的起点，高度1.8m
+        # pos = [-2.5, 21.0, 3.3]  # Y坐标对应section02的起点，高度1.8m
+        # pos = [-2.5, 24.6, 1.8]  # Y坐标对应section02的起点，高度1.8m
+        # pos_randomization_range = [-0.5, -0.5, 0.5, 0.5]  # 小范围随机±0.5m
+        pos_randomization_range = [-0., -0., 0., 0.]  # 小范围随机±0.5m
+        
+        default_joint_angles = {
+            "FR_hip_joint": -0.0,
+            "FR_thigh_joint": 0.9,
+            "FR_calf_joint": -1.8,
+            "FL_hip_joint": 0.0,
+            "FL_thigh_joint": 0.9,
+            "FL_calf_joint": -1.8,
+            "RR_hip_joint": -0.0,
+            "RR_thigh_joint": 0.9,
+            "RR_calf_joint": -1.8,
+            "RL_hip_joint": 0.0,
+            "RL_thigh_joint": 0.9,
+            "RL_calf_joint": -1.8,
+        }
+    
+    @dataclass
+    class Commands:
+        # 目标范围：覆盖section02区域（10-20米）
+        pose_command_range = [-3.0, 16.0, 3.14, -3.0, 26.0, 3.14]
+    
+    @dataclass
+    class ControlConfig:
+        action_scale = 0.25
+    
+    init_state: InitState = field(default_factory=InitState)
+    commands: Commands = field(default_factory=Commands)
+    control_config: ControlConfig = field(default_factory=ControlConfig)
+
+
+@registry.envcfg("vbot_navigation_section03")
+@dataclass
+class VBotSection03EnvCfg(VBotStairsEnvCfg):
+    """VBot Section03单独训练配置 - 终点楼梯地形"""
+    model_file: str = os.path.dirname(__file__) + "/xmls/scene_section03.xml"
+    max_episode_seconds: float = 50.0  # 拉长一倍：从25秒增加到50秒
+    max_episode_steps: int = 5000  # 拉长一倍：从2500步增加到5000步
+    
+    @dataclass
+    class InitState:
+        # 起始位置：section03的起始位置（继承自locomotion）
+        pos = [0.0, 26.0, 1.8]  # Y坐标对应section03的起点，高度1.8m
+        pos_randomization_range = [-0.5, -0.5, 0.5, 0.5]  # 小范围随机±0.5m
+        
+        default_joint_angles = {
+            "FR_hip_joint": -0.0,
+            "FR_thigh_joint": 0.9,
+            "FR_calf_joint": -1.8,
+            "FL_hip_joint": 0.0,
+            "FL_thigh_joint": 0.9,
+            "FL_calf_joint": -1.8,
+            "RR_hip_joint": -0.0,
+            "RR_thigh_joint": 0.9,
+            "RR_calf_joint": -1.8,
+            "RL_hip_joint": 0.0,
+            "RL_thigh_joint": 0.9,
+            "RL_calf_joint": -1.8,
+        }
+    
+    @dataclass
+    class Commands:
+        # 目标范围：覆盖section03区域（20-32米）
+        pose_command_range = [-3.0, 20.0, -3.14, 3.0, 32.0, 3.14]
+    
+    @dataclass
+    class ControlConfig:
+        action_scale = 0.25
+    
+    init_state: InitState = field(default_factory=InitState)
+    commands: Commands = field(default_factory=Commands)
+    control_config: ControlConfig = field(default_factory=ControlConfig)
+
+
+@registry.envcfg("vbot_navigation_long_course")
+@dataclass
+class VBotLongCourseEnvCfg(VBotStairsEnvCfg):
+    """VBot三段地形完整导航配置（比赛任务）- 完整统一地图"""
+    # 使用完整地图包含所有三个阶段 (section011, section012, section013)
+    model_file: str = os.path.dirname(__file__) + "/xmls/scene_section_full.xml"
+    max_episode_seconds: float = 180.0  # 三个阶段需要更长时间：3分钟
+    max_episode_steps: int = 18000  # 对应180秒 @ 100Hz
+    
+    @dataclass
+    class InitState:
+        # 起始位置：section011的起点
+        pos = [0.0, -2.4, 0.5]  # 第一阶段起点
+        pos_randomization_range = [-0.5, -0.5, 0.5, 0.5]  # 小范围随机±0.5m
+        
+        default_joint_angles = {
+            "FR_hip_joint": -0.0,
+            "FR_thigh_joint": 0.9,
+            "FR_calf_joint": -1.8,
+            "FL_hip_joint": 0.0,
+            "FL_thigh_joint": 0.9,
+            "FL_calf_joint": -1.8,
+            "RR_hip_joint": -0.0,
+            "RR_thigh_joint": 0.9,
+            "RR_calf_joint": -1.8,
+            "RL_hip_joint": 0.0,
+            "RL_thigh_joint": 0.9,
+            "RL_calf_joint": -1.8,
+        }
+    
+    @dataclass
+    class Commands:
+        # 目标范围：覆盖三个阶段的完整路线 (Y: -2.4到30米)
+        pose_command_range = [-3.0, 5.0, -3.14, 3.0, 30.0, 3.14]
+    
+    @dataclass
+    class ControlConfig:
+        action_scale = 0.25  # 与stairs保持一致
+    
+    init_state: InitState = field(default_factory=InitState)
+    commands: Commands = field(default_factory=Commands)
+    control_config: ControlConfig = field(default_factory=ControlConfig)
+
+@registry.envcfg("vbot_navigation_section001")
+#通过 @registry.envcfg("vbot_navigation_section001") 注册
+@dataclass
+class VBotSection001EnvCfg(VBotStairsEnvCfg):
+    """VBot Section01单独训练配置 - 高台楼梯地形"""
+    model_file: str = os.path.dirname(__file__) + "/xmls/scene_section001.xml"
+    max_episode_seconds: float = 40.0  # 拉长一倍：从20秒增加到40秒
+    max_episode_steps: int = 4000  # 拉长一倍：从2000步增加到4000步
+    @dataclass
+    class InitState:
+        # 起始位置：随机化范围内生成
+        pos = [0.0, -2.4, 0.5]  # 中心位置
         pos_randomization_range = [-0.5, -0.5, 0.5, 0.5]  # X±0.5m, Y±0.5m随机
 
         default_joint_angles = {
@@ -197,273 +380,75 @@ class VBotSection01EnvCfg(VBotStairsEnvCfg):
             "RL_thigh_joint": 0.9,
             "RL_calf_joint": -1.8,
         }
-
     @dataclass
     class Commands:
         # 目标位置：缩短距离，固定目标点
         # 起始位置Y=-2.4, 目标Y=3.6, 距离=6米（与vbot_np相近）
         # pose_command_range = [0.0, 3.6, 0.0, 0.0, 3.6, 0.0]
-
         # 原始配置（已注释）：
         # 目标位置：固定在终止角范围远端（完全无随机化）
         # 固定目标点: X=0, Y=10.2, Z=2 (Z通过XML控制)
         # 起始位置Y=-2.4, 目标Y=10.2, 距离=12.6米
         pose_command_range = [0.0, 10.2, 0.0, 0.0, 10.2, 0.0]
-
     @dataclass
     class ControlConfig:
         action_scale = 0.25
-
     init_state: InitState = field(default_factory=InitState)
     commands: Commands = field(default_factory=Commands)
     control_config: ControlConfig = field(default_factory=ControlConfig)
 
-
-@registry.envcfg("vbot_navigation_section02")
 @dataclass
-class VBotSection02EnvCfg(VBotStairsEnvCfg):
-    """VBot Section02单独训练配置 - 中间楼梯地形"""
-    model_file: str = os.path.dirname(__file__) + "/xmls/scene_section02.xml"
-    max_episode_seconds: float = 60.0  # Section02较复杂，需要更多时间
-    max_episode_steps: int = 6000
-
-    @dataclass
-    class InitState:
-        # 起始位置：section02的起始位置（继承自locomotion）
-        # pos = [-2.5, 8.5, 1.8]
-        # pos = [-2.5, 8.5, 1.8]
-        pos = [-2.5, 12.0, 1.8]  # Y坐标对应section02的起点，高度1.8m
-        # pos = [-2.5, 15.0, 3.3]  # Y坐标对应section02的起点，高度1.8m
-        # pos = [-2.5, 21.0, 3.3]  # Y坐标对应section02的起点，高度1.8m
-        # pos = [-2.5, 24.6, 1.8]  # Y坐标对应section02的起点，高度1.8m
-        # pos_randomization_range = [-0.5, -0.5, 0.5, 0.5]  # 小范围随机±0.5m
-        pos_randomization_range = [-0., -0., 0., 0.]  # 小范围随机±0.5m
-
-        default_joint_angles = {
-            "FR_hip_joint": -0.0,
-            "FR_thigh_joint": 0.9,
-            "FR_calf_joint": -1.8,
-            "FL_hip_joint": 0.0,
-            "FL_thigh_joint": 0.9,
-            "FL_calf_joint": -1.8,
-            "RR_hip_joint": -0.0,
-            "RR_thigh_joint": 0.9,
-            "RR_calf_joint": -1.8,
-            "RL_hip_joint": 0.0,
-            "RL_thigh_joint": 0.9,
-            "RL_calf_joint": -1.8,
-        }
-
-    @dataclass
-    class Commands:
-        # 目标范围：覆盖section02区域（10-20米）
-        pose_command_range = [-3.0, 16.0, 3.14, -3.0, 26.0, 3.14]
-
-    @dataclass
-    class ControlConfig:
-        action_scale = 0.25
-
-    init_state: InitState = field(default_factory=InitState)
-    commands: Commands = field(default_factory=Commands)
-    control_config: ControlConfig = field(default_factory=ControlConfig)
-
-
-@registry.envcfg("vbot_navigation_section03")
-@dataclass
-class VBotSection03EnvCfg(VBotStairsEnvCfg):
-    """VBot Section03单独训练配置 - 终点楼梯地形"""
-    model_file: str = os.path.dirname(__file__) + "/xmls/scene_section03.xml"
-    max_episode_seconds: float = 50.0  # 拉长一倍：从25秒增加到50秒
-    max_episode_steps: int = 5000  # 拉长一倍：从2500步增加到5000步
-
-    @dataclass
-    class InitState:
-        # 起始位置：section03的起始位置（继承自locomotion）
-        pos = [0.0, 26.0, 1.8]  # Y坐标对应section03的起点，高度1.8m
-        pos_randomization_range = [-0.5, -0.5, 0.5, 0.5]  # 小范围随机±0.5m
-
-        default_joint_angles = {
-            "FR_hip_joint": -0.0,
-            "FR_thigh_joint": 0.9,
-            "FR_calf_joint": -1.8,
-            "FL_hip_joint": 0.0,
-            "FL_thigh_joint": 0.9,
-            "FL_calf_joint": -1.8,
-            "RR_hip_joint": -0.0,
-            "RR_thigh_joint": 0.9,
-            "RR_calf_joint": -1.8,
-            "RL_hip_joint": 0.0,
-            "RL_thigh_joint": 0.9,
-            "RL_calf_joint": -1.8,
-        }
-
-    @dataclass
-    class Commands:
-        # 目标范围：覆盖section03区域（20-32米）
-        pose_command_range = [-3.0, 20.0, -3.14, 3.0, 32.0, 3.14]
-
-    @dataclass
-    class ControlConfig:
-        action_scale = 0.25
-
-    init_state: InitState = field(default_factory=InitState)
-    commands: Commands = field(default_factory=Commands)
-    control_config: ControlConfig = field(default_factory=ControlConfig)
-
-
-@registry.envcfg("vbot_navigation_long_course")
-@dataclass
-class VBotLongCourseEnvCfg(VBotStairsEnvCfg):
-    """VBot三段地形完整导航配置（比赛任务）- 使用world.xml统一地图"""
-    # 使用scene_world.xml作为完整的三段地形地图（集成了world.xml）
-    model_file: str = os.path.dirname(__file__) + "/xmls/scene_world.xml"
-    max_episode_seconds: float = 60.0  # 优化：减少到60秒，加快训练速度
-    max_episode_steps: int = 6000  # 对应60秒 @ 100Hz
-
-    @dataclass
-    class InitState:
-        # 起始位置：section01的中心位置
-        pos = [0.0, 0.0, 1.8]  # 高台中心，高度1.8m
-        pos_randomization_range = [-0.5, -0.5, 0.5, 0.5]  # 小范围随机±0.5m
-
-        default_joint_angles = {
-            "FR_hip_joint": -0.0,
-            "FR_thigh_joint": 0.9,
-            "FR_calf_joint": -1.8,
-            "FL_hip_joint": 0.0,
-            "FL_thigh_joint": 0.9,
-            "FL_calf_joint": -1.8,
-            "RR_hip_joint": -0.0,
-            "RR_thigh_joint": 0.9,
-            "RR_calf_joint": -1.8,
-            "RL_hip_joint": 0.0,
-            "RL_thigh_joint": 0.9,
-            "RL_calf_joint": -1.8,
-        }
-
-    @dataclass
-    class Commands:
-        # 目标范围：覆盖整个30米路线（section01:0-10m, section02:10-20m, section03:20-30m）
-        pose_command_range = [-3.0, 20.0, -3.14, 3.0, 32.0, 3.14]
-
-    @dataclass
-    class ControlConfig:
-        action_scale = 0.25  # 与stairs保持一致
-
-    init_state: InitState = field(default_factory=InitState)
-    commands: Commands = field(default_factory=Commands)
-    control_config: ControlConfig = field(default_factory=ControlConfig)
-
-@registry.envcfg("vbot_navigation_section001")
-@dataclass
-class VBotSection001EnvCfg(VBotStairsEnvCfg):
-    """VBot Section01单独训练配置 - 高台楼梯地形"""
-    model_file: str = os.path.dirname(__file__) + "/xmls/scene_section001.xml"
-
-    # 缩短距离到6米，给40秒足够完成
-    max_episode_seconds: float = 40.0
-    max_episode_steps: int = 2000  # 40s × 50Hz = 2000步 ✅
-
-    # 竞技场参数
-    arena_outer_radius: float = 3.0  # 外圈半径
-    arena_inner_radius: float = 1.5  # 内圈半径
-    boundary_radius: float = 3.5  # 物理边界半径
-    arena_center: list = field(default_factory=lambda: [0.0, 0.0])  # 圆心坐标
-    min_spawn_distance: float = 2.8  # 机器人生成时距离目标(圆心)的最小距离
-
-    @dataclass
-    class InitState:
-        # pos = [0.0, -2.4, 0.5]  # 原始起点 (距离目标6m)
-        # [Curriculum Phase 1] 缩短距离至3m，极大增加早期训练的正反馈概率
-        pos = [0.0, 0.6, 0.5]
-
-        # 起始位置随机化 ±0.3m（小范围）
-        pos_randomization_range = [-0.3, -0.3, 0.3, 0.3]
-
-        default_joint_angles = {
-            "FR_hip_joint": -0.0,
-            "FR_thigh_joint": 0.9,
-            "FR_calf_joint": -1.8,
-            "FL_hip_joint": 0.0,
-            "FL_thigh_joint": 0.9,
-            "FL_calf_joint": -1.8,
-            "RR_hip_joint": -0.0,
-            "RR_thigh_joint": 0.9,
-            "RR_calf_joint": -1.8,
-            "RL_hip_joint": 0.0,
-            "RL_thigh_joint": 0.9,
-            "RL_calf_joint": -1.8,
-        }
-
-    @dataclass
-    class Commands:
-        # 目标位置：Y=3.6，距离=6米（合理）
-        # 添加小范围随机化防止过拟合
-        pose_command_range = [
-            -0.2, 3.4, -0.3,  # X±0.2m, Y=3.4~3.8m, yaw±0.3rad
-             0.2, 3.8,  0.3
-        ]
-
-    @dataclass
-    class ControlConfig:
-        action_scale = 0.25
-
-    init_state: InitState = field(default_factory=InitState)
-    commands: Commands = field(default_factory=Commands)
-    control_config: ControlConfig = field(default_factory=ControlConfig)
-
-
-@registry.envcfg("vbot_nav_section1")
-@dataclass
-class VBotNavSection1EnvCfg(VBotStairsEnvCfg):
-    """VBot Navigation Section 1 Competition Environment - Obstacle Navigation with Smileys and Hongbaos"""
-    model_file: str = os.path.dirname(__file__) + "/xmls/scene_section01.xml"
-    max_episode_seconds: float = 70.0  # 70 seconds to explore full course with bonuses
-    max_episode_steps: int = 7000  # 70s × 100Hz = 7000 steps
-
-    # Competition zone coordinates (based on terrain geometry analysis)
-    # START zone: rear platform at y=-2.5 to -1.5
-    start_zone_center: list = field(default_factory=lambda: [0.0, -2.0])
-    start_zone_radius: float = 1.5  # Random spawn within ±1.5m
+class CompetitionConfig:
+    """竞赛模式配置 - 用于支持emoji、红包、终点等竞赛元素"""
+    # 起点区域
+    start_zone_center: list = field(default_factory=lambda: [0.0, -2.4])
+    start_zone_radius: float = 1.0
     
-    # 3 Smiley face zones in pit terrain (approximately y=0 to 2)
+    # Emoji位置 (3个)
     smiley_positions: list = field(default_factory=lambda: [
-        [-2.0, 0.5],   # Left smiley
-        [0.0, 1.0],    # Center smiley
-        [2.0, 0.5],    # Right smiley
+        [0.0, 0.0],      # Emoji 1
+        [0.0, 5.0],      # Emoji 2
+        [0.0, 10.0],     # Emoji 3
     ])
-    smiley_radius: float = 0.8  # Trigger radius for smiley
+    smiley_radius: float = 0.5
     
-    # 3 Hongbao (red envelope) zones on slope terrain (approximately y=4 to 6)
+    # 红包位置 (3个)
     hongbao_positions: list = field(default_factory=lambda: [
-        [-1.5, 4.5],   # Left hongbao
-        [0.0, 5.0],    # Center hongbao  
-        [1.5, 4.5],    # Right hongbao
+        [1.0, 2.5],      # 红包 1
+        [1.0, 7.5],      # 红包 2
+        [1.0, 12.5],     # 红包 3
     ])
-    hongbao_radius: float = 0.6  # Trigger radius for hongbao
+    hongbao_radius: float = 0.5
     
-    # 2026 finish zone: front platform at y=7.5 to 8.5
-    finish_zone_center: list = field(default_factory=lambda: [0.0, 8.0])
-    finish_zone_radius: float = 1.5  # Trigger radius for finish
+    # 终点区域
+    finish_zone_center: list = field(default_factory=lambda: [0.0, 10.2])
+    finish_zone_radius: float = 1.0
     
-    # Boundary limits (x=±5m, y=-3.75 to 8.8m)
-    boundary_x_min: float = -5.0
-    boundary_x_max: float = 5.0
-    boundary_y_min: float = -3.5
-    boundary_y_max: float = 9.0
+    # 边界限制
+    boundary_x_min: float = -20.0
+    boundary_x_max: float = 20.0
+    boundary_y_min: float = -10.0
+    boundary_y_max: float = 20.0
     
-    # Celebration action bonus parameters
-    celebration_duration: float = 1.0  # Stay still for 1 second at finish
-    celebration_movement_threshold: float = 0.1  # Max movement speed during celebration
+    # 庆祝参数
+    celebration_duration: float = 1.0
+    celebration_movement_threshold: float = 0.1
 
+
+@registry.envcfg("vbot_navigation_section011")
+#通过 @registry.envcfg("vbot_navigation_section011") 注册
+@dataclass
+class VBotSection011EnvCfg(VBotStairsEnvCfg):
+    """VBot Section01单独训练配置 - 高台楼梯地形"""
+    model_file: str = os.path.dirname(__file__) + "/xmls/scene_section011.xml"
+    max_episode_seconds: float = 40.0  # 拉长一倍：从20秒增加到40秒
+    max_episode_steps: int = 4000  # 拉长一倍：从2000步增加到4000步
     @dataclass
     class InitState:
-        # Starting position at START zone center
-        pos = [0.0, -2.0, 0.5]
-        
-        # Random spawn within START zone (±1.5m)
-        pos_randomization_range = [-1.5, -1.5, 1.5, 1.5]
-        
+        # 起始位置：随机化范围内生成
+        pos = [0.0, -2.4, 0.5]  # 中心位置
+        pos_randomization_range = [-0.5, -0.5, 0.5, 0.5]  # X±0.5m, Y±0.5m随机
+
         default_joint_angles = {
             "FR_hip_joint": -0.0,
             "FR_thigh_joint": 0.9,
@@ -478,16 +463,112 @@ class VBotNavSection1EnvCfg(VBotStairsEnvCfg):
             "RL_thigh_joint": 0.9,
             "RL_calf_joint": -1.8,
         }
-
     @dataclass
     class Commands:
-        # Target is the finish zone
-        pose_command_range = [0.0, 8.0, 0.0, 0.0, 8.0, 0.0]
-
+        # 目标位置：缩短距离，固定目标点
+        # 起始位置Y=-2.4, 目标Y=3.6, 距离=6米（与vbot_np相近）
+        # pose_command_range = [0.0, 3.6, 0.0, 0.0, 3.6, 0.0]
+        # 原始配置（已注释）：
+        # 目标位置：固定在终止角范围远端（完全无随机化）
+        # 固定目标点: X=0, Y=10.2, Z=2 (Z通过XML控制)
+        # 起始位置Y=-2.4, 目标Y=10.2, 距离=12.6米
+        pose_command_range = [0.0, 10.2, 0.0, 0.0, 10.2, 0.0]
     @dataclass
     class ControlConfig:
         action_scale = 0.25
-
     init_state: InitState = field(default_factory=InitState)
     commands: Commands = field(default_factory=Commands)
     control_config: ControlConfig = field(default_factory=ControlConfig)
+    # 竞赛配置
+    competition: CompetitionConfig = field(default_factory=CompetitionConfig)
+
+@registry.envcfg("vbot_navigation_section012")
+#通过 @registry.envcfg("vbot_navigation_section012") 注册
+@dataclass
+class VBotSection012EnvCfg(VBotStairsEnvCfg):
+    """VBot Section01单独训练配置 - 高台楼梯地形"""
+    model_file: str = os.path.dirname(__file__) + "/xmls/scene_section012.xml"
+    max_episode_seconds: float = 40.0  # 拉长一倍：从20秒增加到40秒
+    max_episode_steps: int = 4000  # 拉长一倍：从2000步增加到4000步
+    @dataclass
+    class InitState:
+        # 起始位置：随机化范围内生成
+        pos = [-2.5, 15.0, 3.3]  # 中心位置
+        pos_randomization_range = [-0., -0., 0., 0.]  # X±0.5m, Y±0.5m随机
+
+        default_joint_angles = {
+            "FR_hip_joint": -0.0,
+            "FR_thigh_joint": 0.9,
+            "FR_calf_joint": -1.8,
+            "FL_hip_joint": 0.0,
+            "FL_thigh_joint": 0.9,
+            "FL_calf_joint": -1.8,
+            "RR_hip_joint": -0.0,
+            "RR_thigh_joint": 0.9,
+            "RR_calf_joint": -1.8,
+            "RL_hip_joint": 0.0,
+            "RL_thigh_joint": 0.9,
+            "RL_calf_joint": -1.8,
+        }
+    @dataclass
+    class Commands:
+        # 目标位置：缩短距离，固定目标点
+        # 起始位置Y=-2.4, 目标Y=3.6, 距离=6米（与vbot_np相近）
+        # pose_command_range = [0.0, 3.6, 0.0, 0.0, 3.6, 0.0]
+        # 原始配置（已注释）：
+        # 目标位置：固定在终止角范围远端（完全无随机化）
+        # 固定目标点: X=0, Y=10.2, Z=2 (Z通过XML控制)
+        # 起始位置Y=-2.4, 目标Y=10.2, 距离=12.6米
+        pose_command_range = [0.0, 10.2, 0.0, 0.0, 10.2, 0.0]
+    @dataclass
+    class ControlConfig:
+        action_scale = 0.25
+    init_state: InitState = field(default_factory=InitState)
+    commands: Commands = field(default_factory=Commands)
+    control_config: ControlConfig = field(default_factory=ControlConfig)
+
+@registry.envcfg("vbot_navigation_section013")
+#通过 @registry.envcfg("vbot_navigation_section013") 注册
+@dataclass
+class VBotSection013EnvCfg(VBotStairsEnvCfg):
+    """VBot Section01单独训练配置 - 高台楼梯地形"""
+    model_file: str = os.path.dirname(__file__) + "/xmls/scene_section013.xml"
+    max_episode_seconds: float = 40.0  # 拉长一倍：从20秒增加到40秒
+    max_episode_steps: int = 4000  # 拉长一倍：从2000步增加到4000步
+    @dataclass
+    class InitState:
+        # 起始位置：随机化范围内生成
+        pos = [0.0, 26.0, 3.3]  # 中心位置
+        pos_randomization_range = [-0., -0., 0., 0.]  # X±0.5m, Y±0.5m随机
+
+        default_joint_angles = {
+            "FR_hip_joint": -0.0,
+            "FR_thigh_joint": 0.9,
+            "FR_calf_joint": -1.8,
+            "FL_hip_joint": 0.0,
+            "FL_thigh_joint": 0.9,
+            "FL_calf_joint": -1.8,
+            "RR_hip_joint": -0.0,
+            "RR_thigh_joint": 0.9,
+            "RR_calf_joint": -1.8,
+            "RL_hip_joint": 0.0,
+            "RL_thigh_joint": 0.9,
+            "RL_calf_joint": -1.8,
+        }
+    @dataclass
+    class Commands:
+        # 目标位置：缩短距离，固定目标点
+        # 起始位置Y=-2.4, 目标Y=3.6, 距离=6米（与vbot_np相近）
+        # pose_command_range = [0.0, 3.6, 0.0, 0.0, 3.6, 0.0]
+        # 原始配置（已注释）：
+        # 目标位置：固定在终止角范围远端（完全无随机化）
+        # 固定目标点: X=0, Y=10.2, Z=2 (Z通过XML控制)
+        # 起始位置Y=-2.4, 目标Y=10.2, 距离=12.6米
+        pose_command_range = [0.0, 10.2, 0.0, 0.0, 10.2, 0.0]
+    @dataclass
+    class ControlConfig:
+        action_scale = 0.25
+    init_state: InitState = field(default_factory=InitState)
+    commands: Commands = field(default_factory=Commands)
+    control_config: ControlConfig = field(default_factory=ControlConfig)
+

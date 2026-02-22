@@ -275,94 +275,224 @@ class manipulation:
 
 
 class navigation:
-    @rlcfg("anymal_c_navigation_flat")
+    # @rlcfg("anymal_c_navigation_flat")  # 注释：环境未注册
+    # @dataclass
+    # class AnymalCPPOConfig(PPOCfg):
+    #     """AnymalC环境已移至_starter_kit中，此处保留仅供参考"""
+    #     # ===== Basic Training Parameters =====
+    #     seed: int = 42  # Random seed
+    #     num_envs: int = 2048  # Number of parallel environments during training
+    #     play_num_envs: int = 16  # Number of parallel environments during evaluation
+    #     max_env_steps: int = 100_000_000  # Maximum training steps
+    #     check_point_interval: int = 1000  # Checkpoint save interval (save every 100 iterations)
+    #
+    #     # ===== PPO Algorithm Core Parameters =====
+    #     learning_rate: float = 3e-4  # Learning rate
+    #     rollouts: int = 48  # Number of experience replay rollouts
+    #     learning_epochs: int = 6  # Number of training epochs per update
+    #     mini_batches: int = 32  # Number of mini-batches
+    #     discount_factor: float = 0.99  # Discount factor
+    #     lambda_param: float = 0.95  # GAE parameter
+    #     grad_norm_clip: float = 1.0  # Gradient clipping
+    #
+    #     # ===== PPO Clipping Parameters =====
+    #     ratio_clip: float = 0.2  # PPO clipping ratio
+    #     value_clip: float = 0.2  # Value clipping
+    #     clip_predicted_values: bool = True  # Clip predicted values
+    #
+    #     # Medium-sized network (default configuration, suitable for most tasks)
+    #     policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+    #     value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+
+    @rlcfg("vbot_navigation_flat")
     @dataclass
-    class AnymalCPPOConfig(PPOCfg):
-        # ===== Basic Training Parameters =====
-        seed: int = 42  # Random seed
-        num_envs: int = 2048  # Number of parallel environments during training
-        play_num_envs: int = 16  # Number of parallel environments during evaluation
-        max_env_steps: int = 100_000_000  # Maximum training steps
-        check_point_interval: int = 1000  # Checkpoint save interval (save every 100 iterations)
-
-        # ===== PPO Algorithm Core Parameters =====
-        learning_rate: float = 3e-4  # Learning rate
-        rollouts: int = 48  # Number of experience replay rollouts
-        learning_epochs: int = 6  # Number of training epochs per update
-        mini_batches: int = 32  # Number of mini-batches
-        discount_factor: float = 0.99  # Discount factor
-        lambda_param: float = 0.95  # GAE parameter
-        grad_norm_clip: float = 1.0  # Gradient clipping
-
-        # ===== PPO Clipping Parameters =====
-        ratio_clip: float = 0.2  # PPO clipping ratio
-        value_clip: float = 0.2  # Value clipping
-        clip_predicted_values: bool = True  # Clip predicted values
-
-        # Medium-sized network (default configuration, suitable for most tasks)
-        policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
-        value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
-
-    @rlcfg("vbot_navigation_section001")
-    @dataclass
-    class VbotPPOConfig(PPOCfg):
-        # ===== Basic Training Parameters =====
+    class VBotNavigationPPOConfig(PPOCfg):
         seed: int = 42
-        
-        # 环境数量（根据GPU显存调整）
-        num_envs: int = 512  # 训练环境（16GB GPU适用）
-        play_num_envs: int = 16  # 评估环境
-        
-        # 训练步数（4M steps ≈ 170 iterations ≈ 3-4小时）
-        max_env_steps: int = 8_000_000  # 4M steps
-        check_point_interval: int = 50  # 每50次迭代保存
-        
-        # ===== PPO Algorithm Core Parameters =====
-        learning_rate: float = 1e-4  # 保守学习率
-        rollouts: int = 48  # 保持不变
-        learning_epochs: int = 8  # 保持不变
-        mini_batches: int = 32  # 保持不变
-        discount_factor: float = 0.99
-        lambda_param: float = 0.95
-        grad_norm_clip: float = 1.0
-        
-        # ===== PPO Clipping Parameters =====
-        ratio_clip: float = 0.2
-        value_clip: float = 0.2
-        clip_predicted_values: bool = True
-        
-        # 网络结构（导航任务适中即可）
-        policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
-        value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+        num_envs: int = 2048
+        play_num_envs: int = 16
+        max_env_steps: int = 100_000_000
+        check_point_interval: int = 1000
 
-    @rlcfg("vbot_nav_section1")
-    @dataclass
-    class VbotNavSection1PPOConfig(PPOCfg):
-        # ===== Basic Training Parameters =====
-        seed: int = 42
-
-        # 环境数量（根据GPU显存调整）
-        num_envs: int = 512  # 训练环境（16GB GPU适用）
-        play_num_envs: int = 16  # 评估环境
-
-        # 训练步数
-        max_env_steps: int = 8_000_000
-        check_point_interval: int = 50
-
-        # ===== PPO Algorithm Core Parameters =====
-        learning_rate: float = 1e-4
+        learning_rate: float = 3e-4
         rollouts: int = 48
-        learning_epochs: int = 8
+        learning_epochs: int = 6
         mini_batches: int = 32
         discount_factor: float = 0.99
         lambda_param: float = 0.95
         grad_norm_clip: float = 1.0
 
-        # ===== PPO Clipping Parameters =====
         ratio_clip: float = 0.2
         value_clip: float = 0.2
         clip_predicted_values: bool = True
 
-        # 网络结构（导航任务适中即可）
         policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
         value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+
+    @rlcfg("vbot_navigation_stairs")
+    @dataclass
+    class VBotNavigationStairsPPOConfig(PPOCfg):
+        """VBot stairs导航配置，与locomotion stairs一致"""
+        seed: int = 42
+        share_policy_value_features: bool = False
+        max_env_steps: int = 1024 * 60_000  # 与locomotion一致
+        num_envs: int = 2048
+
+        # 与locomotion stairs一致的PPO配置
+        rollouts: int = 24
+        policy_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
+        value_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
+        learning_epochs: int = 5
+        mini_batches: int = 3
+        learning_rate: float = 3e-4
+
+    @rlcfg("VBotStairsMultiTarget-v0")
+    @dataclass
+    class VBotStairsMultiTargetPPOConfig(PPOCfg):
+        """VBot stairs多目标配置"""
+        seed: int = 42
+        share_policy_value_features: bool = False
+        max_env_steps: int = 1024 * 60_000
+        num_envs: int = 2048
+
+        rollouts: int = 24
+        policy_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
+        value_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
+        learning_epochs: int = 5
+        mini_batches: int = 3
+        learning_rate: float = 3e-4
+
+    @rlcfg("vbot_navigation_stairs_obstacles")
+    @dataclass
+    class VBotNavigationStairsObstaclesPPOConfig(PPOCfg):
+        """VBot stairs障碍物导航配置"""
+        seed: int = 42
+        share_policy_value_features: bool = False
+        max_env_steps: int = 1024 * 60_000
+        num_envs: int = 2048
+
+        rollouts: int = 24
+        policy_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
+        value_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
+        learning_epochs: int = 5
+        mini_batches: int = 3
+        learning_rate: float = 3e-4
+
+    @rlcfg("vbot_navigation_section01")
+    @dataclass
+    class VBotNavigationSection01PPOConfig(PPOCfg):
+        """VBot Section01导航配置，与flatnavigation一致"""
+        seed: int = 42
+        # num_envs: int = 2048
+        num_envs: int = 4096
+        play_num_envs: int = 1
+        max_env_steps: int = 1024 * 60_000
+        check_point_interval: int = 1000
+
+        learning_rate: float = 3e-4
+        rollouts: int = 48
+        learning_epochs: int = 6
+        mini_batches: int = 32
+        discount_factor: float = 0.99
+        lambda_param: float = 0.95
+        grad_norm_clip: float = 1.0
+
+        ratio_clip: float = 0.2
+        value_clip: float = 0.2
+        clip_predicted_values: bool = True
+
+        policy_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
+        value_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
+
+    @rlcfg("vbot_navigation_section02")
+    @dataclass
+    class VBotNavigationSection02PPOConfig(PPOCfg):
+        """VBot Section02导航配置，与flatnavigation一致"""
+        seed: int = 42
+        num_envs: int = 2048
+        play_num_envs: int = 16
+        max_env_steps: int = 1024 * 60_000
+        check_point_interval: int = 1000
+
+        learning_rate: float = 3e-4
+        rollouts: int = 48
+        learning_epochs: int = 6
+        mini_batches: int = 32
+        discount_factor: float = 0.99
+        lambda_param: float = 0.95
+        grad_norm_clip: float = 1.0
+
+        ratio_clip: float = 0.2
+        value_clip: float = 0.2
+        clip_predicted_values: bool = True
+
+        policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+        value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+
+    @rlcfg("vbot_navigation_section03")
+    @dataclass
+    class VBotNavigationSection03PPOConfig(PPOCfg):
+        """VBot Section03导航配置，与flatnavigation一致"""
+        seed: int = 42
+        num_envs: int = 2048
+        play_num_envs: int = 16
+        max_env_steps: int = 1024 * 60_000
+        check_point_interval: int = 1000
+
+        learning_rate: float = 3e-4
+        rollouts: int = 48
+        learning_epochs: int = 6
+        mini_batches: int = 32
+        discount_factor: float = 0.99
+        lambda_param: float = 0.95
+        grad_norm_clip: float = 1.0
+
+        ratio_clip: float = 0.2
+        value_clip: float = 0.2
+        clip_predicted_values: bool = True
+
+        policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+        value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+
+    @rlcfg("vbot_navigation_section011")
+    @dataclass
+    class VBotNavigationSection011PPOConfig(PPOCfg):
+        """VBot Section011竞赛配置（带emoji/红包/终点触发）"""
+        seed: int = 42
+        num_envs: int = 2048
+        play_num_envs: int = 16
+        max_env_steps: int = 1024 * 60_000
+        check_point_interval: int = 1000
+
+        learning_rate: float = 3e-4
+        rollouts: int = 48
+        learning_epochs: int = 6
+        mini_batches: int = 32
+        discount_factor: float = 0.99
+        lambda_param: float = 0.95
+        grad_norm_clip: float = 1.0
+
+        ratio_clip: float = 0.2
+        value_clip: float = 0.2
+        clip_predicted_values: bool = True
+
+        policy_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
+        value_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
+
+    @rlcfg("vbot_navigation_long_course")
+    @dataclass
+    class VBotNavigationLongCoursePPOConfig(PPOCfg):
+        """VBot完整三段赛道导航配置"""
+        seed: int = 42
+        share_policy_value_features: bool = False
+        max_env_steps: int = 1024 * 60_000
+        num_envs: int = 2048
+
+        rollouts: int = 24
+        policy_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
+        value_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
+        learning_epochs: int = 5
+        mini_batches: int = 3
+        learning_rate: float = 3e-4
+
+
+
