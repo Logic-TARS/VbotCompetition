@@ -99,17 +99,17 @@ class RewardConfig:
             "heading_tracking": 1.0,        # 朝向跟踪奖励（新增）
             "forward_velocity": 0.5,        # 前进速度奖励（鼓励朝目标移动）
             
-            # ===== Locomotion稳定性奖励（保持但降低权重） =====
-            "orientation": -0.05,           # 姿态稳定（降低权重）
+            # ===== Anti-Reward-Hacking 强化 =====
+            "orientation": -0.5,            # 姿态稳定（强化10倍，阻止趴地）
             "lin_vel_z": -0.5,              # 垂直速度惩罚
             "ang_vel_xy": -0.05,            # XY轴角速度惩罚
-            "torques": -1e-5,               # 扭矩惩罚
+            "torques": -1e-5,               # 扭矩惩罚（保持小值，不过度惩罚运动）
             "dof_vel": -5e-5,               # 关节速度惩罚
             "dof_acc": -2.5e-7,             # 关节加速度惩罚
             "action_rate": -0.01,           # 动作变化率惩罚
             
             # ===== 终止惩罚 =====
-            "termination": -200.0,          # 终止惩罚
+            "termination": -200.0,          # 终止惩罚（重罚，彻底阻断趴地苟活）
         }
     )
 
