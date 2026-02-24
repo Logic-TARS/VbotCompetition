@@ -342,6 +342,24 @@ class navigation:
         mini_batches: int = 3
         learning_rate: float = 3e-4
 
+    @rlcfg("anymal-c-navigation")
+    @dataclass
+    class AnymalCNavigationPPOConfig(PPOCfg):
+        """AnymalC flat terrain navigation RL config"""
+        seed: int = 42
+        share_policy_value_features: bool = False
+        max_env_steps: int = 1024 * 60_000
+        num_envs: int = 2048
+        play_num_envs: int = 16
+        check_point_interval: int = 1000
+
+        rollouts: int = 24
+        policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+        value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+        learning_epochs: int = 5
+        mini_batches: int = 3
+        learning_rate: float = 3e-4
+
     @rlcfg("vbot_navigation_stairs")
     @dataclass
     class VBotNavigationStairsPPOConfig(PPOCfg):

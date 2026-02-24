@@ -92,6 +92,7 @@ class RewardConfig:
         }
     )
 
+@registry.envcfg("anymal-c-navigation")
 @dataclass
 class AnymalCEnvCfg(EnvCfg):
     model_file: str = model_file
@@ -108,6 +109,9 @@ class AnymalCEnvCfg(EnvCfg):
     reward_config: RewardConfig = field(default_factory=RewardConfig)
     init_state: InitState = field(default_factory=InitState)
     commands: Commands = field(default_factory=Commands)
+    normalization: Normalization = field(default_factory=Normalization)
+    asset: Asset = field(default_factory=Asset)
+    sensor: Sensor = field(default_factory=Sensor)
     normalization: Normalization = field(default_factory=Normalization)
     asset: Asset = field(default_factory=Asset)
     sensor: Sensor = field(default_factory=Sensor)
