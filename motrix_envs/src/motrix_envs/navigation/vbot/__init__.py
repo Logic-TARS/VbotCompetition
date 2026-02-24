@@ -14,10 +14,11 @@
 # ==============================================================================
 
 # from . import vbot_np, vbot_stairs_np, vbot_stairs_multi_target_np, vbot_long_course_np, cfg # noqa: F401
-from . import vbot_section001_np ,vbot_section011_np ,vbot_section012_np, vbot_section013_np, vbot_long_course_np, cfg # noqa: F401
+from . import vbot_section001_np ,vbot_section011_np ,vbot_section012_np, vbot_section013_np, vbot_long_course_np, vbot_nav_flat_np, cfg # noqa: F401
 from .vbot_section001_np import VBotSection001Env
 from .vbot_section011_np import VBotSection011Env
 from .vbot_section012_np import VBotSection012Env
 from .vbot_section013_np import VBotSection013Env
 from .vbot_long_course_np import VBotLongCourseEnv
+from .vbot_nav_flat_np import VBotNavFlatEnv
 from .cfg import VBotEnvCfg, VBotStairsEnvCfg, VBotSection01EnvCfg, VBotSection02EnvCfg, VBotSection03EnvCfg, VBotLongCourseEnvCfg, VBotSection001EnvCfg, VBotSection011EnvCfg, VBotSection012EnvCfg,VBotSection013EnvCfg  # noqa: F401

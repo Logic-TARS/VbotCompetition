@@ -1,0 +1,4 @@
+uv run tensorboard --logdir runs/vbot_navigation_section011
+uv run scripts/train.py --env vbot_navigation_section011
+uv run scripts/train.py --env vbot-flat-terrain-walk
+uv run scripts/train.py --env vbot_navigation_flat
