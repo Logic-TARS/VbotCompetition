@@ -378,6 +378,24 @@ class VBotNavFlatEnv(NpEnv):
             timeout = state.info["steps"] >= self._cfg.max_episode_steps
             terminated = np.logical_or(terminated, timeout)
 
+        # DOF velocity overflow / NaN / Inf protection
+        dof_vel = self.get_dof_vel(data)
+        vel_max = np.abs(dof_vel).max(axis=1)
+        vel_overflow = vel_max > self._cfg.max_dof_vel
+        vel_extreme = (np.isnan(dof_vel).any(axis=1)) | (np.isinf(dof_vel).any(axis=1)) | (vel_max > 1e6)
+        terminated = np.logical_or(terminated, vel_overflow)
+        terminated = np.logical_or(terminated, vel_extreme)
+
+        # Side-flip termination: tilt angle > 75°
+        pose = self._body.get_pose(data)
+        root_quat = pose[:, 3:7]
+        local_gravity = Quaternion.rotate_inverse(root_quat, self.gravity_vec)
+        gxy = np.linalg.norm(local_gravity[:, :2], axis=1)
+        gz = local_gravity[:, 2]
+        tilt_angle = np.arctan2(gxy, np.abs(gz))
+        side_flip_mask = tilt_angle > np.deg2rad(75)
+        terminated = np.logical_or(terminated, side_flip_mask)
+
         return state.replace(terminated=terminated)
 
     # ===================== Feet air time (walk_np) =====================
@@ -398,12 +416,14 @@ class VBotNavFlatEnv(NpEnv):
 
         rewards = {k: v * self._cfg.reward_config.scales[k] for k, v in reward_dict.items()}
         rwd = sum(rewards.values())
-        rwd = np.clip(rwd, 0.0, 10000.0)
+        # Allow negative rewards so that penalties (lin_vel_z, ang_vel_xy, etc.) are effective
+        rwd = np.clip(rwd, -100.0, 10000.0)
         if "termination" in self._cfg.reward_config.scales:
             termination = self._reward_termination(terminated) * self._cfg.reward_config.scales["termination"]
             rwd += termination
 
-        rwd = np.where(terminated, np.array(0.0), rwd)
+        # Keep termination penalty instead of zeroing reward on termination
+        # so the agent learns to avoid falling
 
         return state.replace(reward=rwd)
 

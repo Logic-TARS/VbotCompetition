@@ -35,7 +35,8 @@ class ControlConfig:
     stiffness = 60  # [N*m/rad]
     damping = 0.8   # [N*m*s/rad]
     # action scale: target angle = actionScale * action + defaultAngle
-    action_scale = 0.05
+    # 0.25 gives effective PD force = 60 * 0.25 = 15 N*m, enough for navigation maneuvers
+    action_scale = 0.25
 
 @dataclass
 class InitState:
@@ -95,7 +96,7 @@ class RewardConfig:
     scales: dict[str, float] = field(
         default_factory=lambda: {
             # ===== 运动奖励（与 walk_np 一致） =====
-            "termination": -0.0,
+            "termination": -200.0,
             "tracking_lin_vel": 1.0,
             "tracking_ang_vel": 0.5,
             "lin_vel_z": -2.0,
