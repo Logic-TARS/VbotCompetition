@@ -32,15 +32,15 @@ class NoiseConfig:
 
 @dataclass
 class ControlConfig:
-    # stiffness[N*m/rad] 使用XML中kp参数，仅作记录
-    # damping[N*m*s/rad] 使用XML中kv参数，仅作记录
-    action_scale = 0.25  # 平地navigation使用0.25
-    # torque_limit[N*m] 使用XML forcerange参数
+    stiffness = 60  # [N*m/rad]
+    damping = 0.8   # [N*m*s/rad]
+    # action scale: target angle = actionScale * action + defaultAngle
+    action_scale = 0.05
 
 @dataclass
 class InitState:
     # the initial position of the robot in the world frame
-    pos = [0.0, 0.0, 0.5]  
+    pos = [0.0, 0.0, 0.462]
     
     # 位置随机化范围 [x_min, y_min, x_max, y_max]
     pos_randomization_range = [-10.0, -10.0, 10.0, 10.0]  # 在ground上随机分散20m x 20m范围
@@ -81,6 +81,7 @@ class Asset:
     body_name = "base"
     foot_names = ["FR", "FL", "RR", "RL"]
     terminate_after_contacts_on = ["collision_middle_box", "collision_head_box"]
+    ground_name = "ground"  # 平地场景中地面geom名称
     ground_subtree = "C_"  # 地形根节点，用于subtree接触检测
    
 @dataclass
@@ -93,33 +94,39 @@ class Sensor:
 class RewardConfig:
     scales: dict[str, float] = field(
         default_factory=lambda: {
-            # ===== 导航任务核心奖励 =====
-            "position_tracking": 2.0,      # 位置误差奖励（提高10倍）
-            "fine_position_tracking": 2.0,  # 精细位置奖励（提高10倍）
-            "heading_tracking": 1.0,        # 朝向跟踪奖励（新增）
-            "forward_velocity": 0.5,        # 前进速度奖励（鼓励朝目标移动）
-            
-            # ===== Anti-Reward-Hacking 强化 =====
-            "orientation": -0.5,            # 姿态稳定（强化10倍，阻止趴地）
-            "lin_vel_z": -0.5,              # 垂直速度惩罚
-            "ang_vel_xy": -0.05,            # XY轴角速度惩罚
-            "torques": -1e-5,               # 扭矩惩罚（保持小值，不过度惩罚运动）
-            "dof_vel": -5e-5,               # 关节速度惩罚
-            "dof_acc": -2.5e-7,             # 关节加速度惩罚
-            "action_rate": -0.01,           # 动作变化率惩罚
-            
-            # ===== 终止惩罚 =====
-            "termination": -200.0,          # 终止惩罚（重罚，彻底阻断趴地苟活）
+            # ===== 运动奖励（与 walk_np 一致） =====
+            "termination": -0.0,
+            "tracking_lin_vel": 1.0,
+            "tracking_ang_vel": 0.5,
+            "lin_vel_z": -2.0,
+            "ang_vel_xy": -0.05,
+            "orientation": -0.0,
+            "torques": -0.00001,
+            "dof_vel": -0.0,
+            "dof_acc": -2.5e-7,
+            "base_height": -0.0,
+            "feet_air_time": 1.0,
+            "collision": -0.0,
+            "action_rate": -0.001,
+            "stand_still": -0.0,
+            "hip_pos": -1.0,
+            "calf_pos": -0.0,
+            # ===== 导航专用奖励 =====
+            "approach": 1.0,
+            "arrival_bonus": 10.0,
+            "stop_bonus": 1.0,
         }
     )
+    tracking_sigma: float = 0.25
+    max_foot_height: float = 0.1
 
 @registry.envcfg("vbot_navigation_flat")
 @dataclass
 class VBotEnvCfg(EnvCfg):
     model_file: str = model_file
     reset_noise_scale: float = 0.01
-    max_episode_seconds: float = 10
-    max_episode_steps: int = 1000
+    max_episode_seconds: float = 20.0
+    max_episode_steps: int = 2000
     sim_dt: float = 0.01    # 仿真步长 10ms = 100Hz
     ctrl_dt: float = 0.01
     reset_yaw_scale: float = 0.1

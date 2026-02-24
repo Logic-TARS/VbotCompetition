@@ -234,6 +234,26 @@ class locomotion:
     @dataclass
     class Go1WalkStairsPPO(Go1WalkRoughPPO): ...
 
+    @rlcfg("vbot-flat-terrain-walk")
+    @dataclass
+    class VbotWalkPPO(PPOCfg):
+        """
+        Vbot flat terrain walk RL config (based on Go1)
+        """
+
+        seed: int = 42
+        share_policy_value_features: bool = False
+        max_env_steps: int = 1024 * 60_000
+        num_envs: int = 2048
+
+        # Override PPO configuration
+        rollouts: int = 24
+        policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+        value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+        learning_epochs: int = 5
+        mini_batches: int = 3
+        learning_rate: float = 3e-4
+
 
 class manipulation:
     @rlcfg("franka-lift-cube")
@@ -307,26 +327,20 @@ class navigation:
     @rlcfg("vbot_navigation_flat")
     @dataclass
     class VBotNavigationPPOConfig(PPOCfg):
+        """Vbot flat terrain navigation RL config (aligned with vbot-flat-terrain-walk)"""
         seed: int = 42
+        share_policy_value_features: bool = False
+        max_env_steps: int = 1024 * 60_000
         num_envs: int = 2048
         play_num_envs: int = 16
-        max_env_steps: int = 100_000_000
         check_point_interval: int = 1000
 
-        learning_rate: float = 3e-4
-        rollouts: int = 48
-        learning_epochs: int = 6
-        mini_batches: int = 32
-        discount_factor: float = 0.99
-        lambda_param: float = 0.95
-        grad_norm_clip: float = 1.0
-
-        ratio_clip: float = 0.2
-        value_clip: float = 0.2
-        clip_predicted_values: bool = True
-
+        rollouts: int = 24
         policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
         value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+        learning_epochs: int = 5
+        mini_batches: int = 3
+        learning_rate: float = 3e-4
 
     @rlcfg("vbot_navigation_stairs")
     @dataclass
