@@ -507,8 +507,9 @@ class navigation:
         value_clip: float = 0.2
         clip_predicted_values: bool = True
 
-        policy_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
-        value_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
+        # 网络结构与section001一致 (256,128,64)，以支持从001加载预训练权重进行课程学习
+        policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+        value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
 
     @rlcfg("vbot_navigation_long_course")
     @dataclass
@@ -525,6 +526,39 @@ class navigation:
         learning_epochs: int = 5
         mini_batches: int = 3
         learning_rate: float = 3e-4
+
+    @rlcfg("vbot_navigation_section001")
+    @dataclass
+    class VbotSection001PPOConfig(PPOCfg):
+        """VBot Section001竞赛场地导航配置（圆形赛场，两阶段触发点）"""
+        # ===== Basic Training Parameters =====
+        seed: int = 42
+
+        # 环境数量
+        num_envs: int = 2048  # 与 flat nav 对齐
+        play_num_envs: int = 16  # 评估环境
+
+        # 训练步数（与其他导航任务对齐）
+        max_env_steps: int = 1024 * 60_000  # 61M steps
+        check_point_interval: int = 500
+
+        # ===== PPO Algorithm Core Parameters =====
+        learning_rate: float = 3e-4  # 与 flat nav 对齐
+        rollouts: int = 48
+        learning_epochs: int = 6
+        mini_batches: int = 32
+        discount_factor: float = 0.99
+        lambda_param: float = 0.95
+        grad_norm_clip: float = 1.0
+
+        # ===== PPO Clipping Parameters =====
+        ratio_clip: float = 0.2
+        value_clip: float = 0.2
+        clip_predicted_values: bool = True
+
+        # 网络结构
+        policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+        value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
 
 
 

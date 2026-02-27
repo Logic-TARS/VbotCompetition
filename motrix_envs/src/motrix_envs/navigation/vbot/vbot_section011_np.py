@@ -22,7 +22,14 @@ class VBotSection011Env(NpEnv):
         super().__init__(cfg, num_envs=num_envs)
 
         self._debug_logs = bool(getattr(cfg, "debug_logs", False))
-        
+
+        # ===== 课程学习模式 =====
+        # 当从section001预训练模型继续训练时，设为True
+        # 使观测空间(54维)和动作控制(PD力矩)与section001完全一致
+        self._curriculum_from_001 = bool(getattr(cfg, "curriculum_from_001", False))
+        if self._curriculum_from_001:
+            self._log("[CURRICULUM] 课程学习模式已启用: obs=54维, action=PD力矩控制 (兼容section001)")
+
         # Initialize robot body and contacts
         self._body = self._model.get_body(cfg.asset.body_name)
         self._init_contact_geometry()
@@ -40,13 +47,20 @@ class VBotSection011Env(NpEnv):
 
         # Action and observation spaces
         self._action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(12,), dtype=np.float32)
-        # Observation space: 81 dimensions (60 base + 21 competition-specific)
-        # Base: 60 (linvel:3, gyro:3, gravity:3, joint_angle:12, joint_vel:12, last_actions:12,
-        #           commands:3, position_error:2, heading_error:1, distance:1, reached:1, stop_ready:1,
-        #           base_height:1, base_height_error:1, foot_contacts:4)
-        # Competition: 21 (smiley_relative_pos:6, hongbao_relative_pos:6, trigger_flags:6,
-        #                   finish_relative_pos:2, finish_flag:1)
-        self._observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(81,), dtype=np.float32)
+
+        if self._curriculum_from_001:
+            # 课程模式: 54维观测空间，与section001完全一致
+            # linvel:3, gyro:3, gravity:3, joint_angle:12, joint_vel:12, last_actions:12,
+            # commands:3, position_error:2, heading_error:1, distance:1, reached:1, stop_ready:1
+            self._observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(54,), dtype=np.float32)
+        else:
+            # 标准模式: 81维观测空间 (60 base + 21 competition-specific)
+            # Base: 60 (linvel:3, gyro:3, gravity:3, joint_angle:12, joint_vel:12, last_actions:12,
+            #           commands:3, position_error:2, heading_error:1, distance:1, reached:1, stop_ready:1,
+            #           base_height:1, base_height_error:1, foot_contacts:4)
+            # Competition: 21 (smiley_relative_pos:6, hongbao_relative_pos:6, trigger_flags:6,
+            #                   finish_relative_pos:2, finish_flag:1)
+            self._observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(81,), dtype=np.float32)
 
         self._num_dof_pos = self._model.num_dof_pos
         self._num_dof_vel = self._model.num_dof_vel
@@ -94,6 +108,12 @@ class VBotSection011Env(NpEnv):
                     self.default_angles[i] = angle
 
         self.action_filter_alpha = 0.3
+
+        # ===== 课程模式: PD增益（与section001一致） =====
+        if self._curriculum_from_001:
+            self.kps = np.ones(self._num_action, dtype=np.float32) * getattr(cfg.control_config, 'stiffness', 60.0)
+            self.kds = np.ones(self._num_action, dtype=np.float32) * getattr(cfg.control_config, 'damping', 0.8)
+            self.gravity_vec = np.array([0, 0, -1], dtype=np.float32)
 
         # === Anti-reward-hacking parameters ===
         # Target base height (from init_state.pos[2], the robot's nominal standing height)
@@ -213,7 +233,11 @@ class VBotSection011Env(NpEnv):
             print(message)
 
     def apply_action(self, actions: np.ndarray, state: NpEnvState) -> NpEnvState:
-        """Apply actions to the environment (torque control via position targets)."""
+        """Apply actions to the environment.
+        
+        课程模式: PD力矩控制 (与section001一致)
+        标准模式: 位置控制 (原始section011行为)
+        """
         state.info["last_dof_vel"] = self._body.get_joint_dof_vel(state.data)
 
         state.info["last_actions"] = state.info.get(
@@ -233,11 +257,27 @@ class VBotSection011Env(NpEnv):
 
         state.info["current_actions"] = state.info["filtered_actions"]
 
-        # Convert actions to target joint positions (position control)
-        target_pos = self.default_angles + state.info["current_actions"] * self._cfg.control_config.action_scale
-        state.data.actuator_ctrls = target_pos
+        if self._curriculum_from_001:
+            # 课程模式: PD力矩控制 (与section001的_compute_torques一致)
+            state.data.actuator_ctrls = self._compute_torques(
+                state.info["filtered_actions"], state.data
+            )
+        else:
+            # 标准模式: 位置控制
+            target_pos = self.default_angles + state.info["current_actions"] * self._cfg.control_config.action_scale
+            state.data.actuator_ctrls = target_pos
 
         return state
+
+    def _compute_torques(self, actions, data):
+        """计算PD控制力矩 (课程模式专用，与section001一致)"""
+        actions_scaled = actions * self._cfg.control_config.action_scale
+        dof_pos = self._body.get_joint_dof_pos(data)
+        dof_vel = self._body.get_joint_dof_vel(data)
+        torques = self.kps * (
+            actions_scaled + self.default_angles - dof_pos
+        ) - self.kds * dof_vel
+        return torques
 
     def _extract_root_state(self, data: mtx.SceneData):
         """Extract root position, quaternion and velocity"""
@@ -390,35 +430,57 @@ class VBotSection011Env(NpEnv):
         # Finish zone trigger flag (1 dimension)
         finish_flag = finish_triggered.astype(np.float32)[:, np.newaxis]  # (n_envs, 1)
 
-        # Concatenate all observations
-        obs = np.concatenate(
-            [
-                noisy_linvel,       # 3
-                noisy_gyro,         # 3
-                projected_gravity,  # 3
-                noisy_joint_angle,  # 12
-                noisy_joint_vel,    # 12
-                last_actions,       # 12
-                command_normalized, # 3
-                position_error_normalized,  # 2
-                heading_error_normalized[:, np.newaxis],  # 1
-                distance_normalized[:, np.newaxis],  # 1
-                reached_flag[:, np.newaxis],  # 1
-                stop_ready_flag[:, np.newaxis],  # 1
-                # Anti-reward-hacking observations
-                base_height_normalized[:, np.newaxis],  # 1 (base height / target)
-                base_height_error[:, np.newaxis],  # 1 (height error / target)
-                foot_contacts,  # 4 (FR, FL, RR, RL foot contacts)
-                # Competition-specific observations
-                smiley_relative_pos,  # 6
-                hongbao_relative_pos,  # 6
-                trigger_flags,  # 6
-                finish_relative_pos,  # 2
-                finish_flag,  # 1
-            ],
-            axis=-1,
-        )
-        assert obs.shape == (data.shape[0], 81), f"Expected obs shape (*, 81), got {obs.shape}"
+        # Concatenate observations
+        if self._curriculum_from_001:
+            # 课程模式: 54维观测，与section001完全一致
+            obs = np.concatenate(
+                [
+                    noisy_linvel,       # 3
+                    noisy_gyro,         # 3
+                    projected_gravity,  # 3
+                    noisy_joint_angle,  # 12
+                    noisy_joint_vel,    # 12
+                    last_actions,       # 12
+                    command_normalized, # 3
+                    position_error_normalized,  # 2
+                    heading_error_normalized[:, np.newaxis],  # 1
+                    distance_normalized[:, np.newaxis],  # 1
+                    reached_flag[:, np.newaxis],  # 1
+                    stop_ready_flag[:, np.newaxis],  # 1
+                ],
+                axis=-1,
+            )
+            assert obs.shape == (data.shape[0], 54), f"[CURRICULUM] Expected obs shape (*, 54), got {obs.shape}"
+        else:
+            # 标准模式: 81维观测
+            obs = np.concatenate(
+                [
+                    noisy_linvel,       # 3
+                    noisy_gyro,         # 3
+                    projected_gravity,  # 3
+                    noisy_joint_angle,  # 12
+                    noisy_joint_vel,    # 12
+                    last_actions,       # 12
+                    command_normalized, # 3
+                    position_error_normalized,  # 2
+                    heading_error_normalized[:, np.newaxis],  # 1
+                    distance_normalized[:, np.newaxis],  # 1
+                    reached_flag[:, np.newaxis],  # 1
+                    stop_ready_flag[:, np.newaxis],  # 1
+                    # Anti-reward-hacking observations
+                    base_height_normalized[:, np.newaxis],  # 1 (base height / target)
+                    base_height_error[:, np.newaxis],  # 1 (height error / target)
+                    foot_contacts,  # 4 (FR, FL, RR, RL foot contacts)
+                    # Competition-specific observations
+                    smiley_relative_pos,  # 6
+                    hongbao_relative_pos,  # 6
+                    trigger_flags,  # 6
+                    finish_relative_pos,  # 2
+                    finish_flag,  # 1
+                ],
+                axis=-1,
+            )
+            assert obs.shape == (data.shape[0], 81), f"Expected obs shape (*, 81), got {obs.shape}"
 
         # Prevent NaN/Inf propagation
         obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)

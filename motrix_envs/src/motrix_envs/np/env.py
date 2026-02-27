@@ -120,6 +120,8 @@ class NpEnv(ABEnv):
             return
 
         np.putmask(state.info["steps"], done, 0)
+        np.putmask(state.terminated, done, False)
+        np.putmask(state.truncated, done, False)
         data = state.data[done]
         obs, info1 = self.reset(data)
         state.obs[done] = obs

@@ -335,7 +335,7 @@ class navigation:
         policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
         value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
 
-    @rlcfg("vbot_nav_section1")
+    @rlcfg("vbot_navigation_section1")
     @dataclass
     class VbotNavSection1PPOConfig(PPOCfg):
         # ===== Basic Training Parameters =====

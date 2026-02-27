@@ -41,7 +41,7 @@ class ControlConfig:
 @dataclass
 class InitState:
     # the initial position of the robot in the world frame
-    pos = [0.0, 0.0, 0.462]
+    pos = [0.0, 0.0, 0.40]
     
     # 位置随机化范围 [x_min, y_min, x_max, y_max]
     pos_randomization_range = [-10.0, -10.0, 10.0, 10.0]  # 在ground上随机分散20m x 20m范围
@@ -185,7 +185,7 @@ class VBotSection01EnvCfg(VBotStairsEnvCfg):
     @dataclass
     class InitState:
         # 起始位置：随机化范围内生成
-        pos = [0.0, -2.4, 0.5]  # 中心位置
+        pos = [0.0, -2.4, 0.35]  # 中心位置（降低初始高度，减少自由落体）
         
         pos_randomization_range = [-0.5, -0.5, 0.5, 0.5]  # X±0.5m, Y±0.5m随机
         
@@ -368,6 +368,7 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
     model_file: str = os.path.dirname(__file__) + "/xmls/scene_section001.xml"
     max_episode_seconds: float = 40.0  # 拉长一倍：从20秒增加到40秒
     max_episode_steps: int = 4000  # 拉长一倍：从2000步增加到4000步
+    render_spacing: float = 0  # 多环境渲染时不添加间距
     @dataclass
     class InitState:
         # 起始位置：随机化范围内生成
@@ -400,10 +401,17 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
         pose_command_range = [0.0, 10.2, 0.0, 0.0, 10.2, 0.0]
     @dataclass
     class ControlConfig:
+        stiffness = 60   # [N*m/rad] 与 VBotEnvCfg 基类一致
+        damping = 0.8    # [N*m*s/rad] 与 VBotEnvCfg 基类一致
         action_scale = 0.25
     init_state: InitState = field(default_factory=InitState)
     commands: Commands = field(default_factory=Commands)
     control_config: ControlConfig = field(default_factory=ControlConfig)
+
+    # 竞赛场地参数
+    min_spawn_distance: float = 2.0   # 出生点距目标(圆心)的最小距离(m) — 从8.0降低，便于探索
+    boundary_radius: float = 10.0      # 竞赛场地边界半径(m)
+    arena_center: list = field(default_factory=lambda: [0.0, 0.0])  # 圆心坐标
 
 @dataclass
 class CompetitionConfig:
@@ -452,6 +460,13 @@ class VBotSection011EnvCfg(VBotStairsEnvCfg):
     max_episode_seconds: float = 40.0  # 拉长一倍：从20秒增加到40秒
     max_episode_steps: int = 4000  # 拉长一倍：从2000步增加到4000步
     render_spacing: float = 0  # 多环境渲染时不添加间距
+
+    # ===== 课程学习模式 =====
+    # 设为True以兼容从section001预训练模型继续训练
+    # 开启后：观测空间=54维(与001一致)，动作控制=PD力矩(与001一致)
+    # 关闭时：观测空间=81维(含竞赛特征)，动作控制=位置控制
+    curriculum_from_001: bool = False
+
     @dataclass
     class InitState:
         # 起始位置：随机化范围内生成
@@ -484,6 +499,8 @@ class VBotSection011EnvCfg(VBotStairsEnvCfg):
         pose_command_range = [0.0, 10.2, 0.0, 0.0, 10.2, 0.0]
     @dataclass
     class ControlConfig:
+        stiffness = 60   # [N*m/rad] PD控制刚度（课程模式使用，与section001一致）
+        damping = 0.8    # [N*m*s/rad] PD控制阻尼（课程模式使用，与section001一致）
         action_scale = 0.25
     init_state: InitState = field(default_factory=InitState)
     commands: Commands = field(default_factory=Commands)

@@ -13,6 +13,10 @@
 # limitations under the License.
 # ==============================================================================
 
+import os
+
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
 import logging
 from pathlib import Path
 
@@ -34,6 +38,32 @@ _POLICY = flags.DEFINE_string("policy", None, "The policy to load")
 _NUM_ENVS = flags.DEFINE_integer("num-envs", 2048, "Number of envs to play")
 _SEED = flags.DEFINE_integer("seed", None, "Random seed for reproducibility")
 _RAND_SEED = flags.DEFINE_bool("rand-seed", False, "Generate random seed")
+_ENV_CFG = flags.DEFINE_multi_string(
+    "env-cfg", [], "Environment config overrides in key=value format (e.g. --env-cfg curriculum_from_001=True)"
+)
+
+
+def _parse_env_cfg_overrides(env_cfg_flags: list[str]) -> dict:
+    """Parse --env-cfg key=value pairs into a dictionary."""
+    overrides = {}
+    for item in env_cfg_flags:
+        if "=" not in item:
+            raise ValueError(f"Invalid --env-cfg format: '{item}'. Expected key=value.")
+        key, value = item.split("=", 1)
+        key = key.strip()
+        if value.lower() in ("true", "yes", "1"):
+            overrides[key] = True
+        elif value.lower() in ("false", "no", "0"):
+            overrides[key] = False
+        else:
+            try:
+                overrides[key] = int(value)
+            except ValueError:
+                try:
+                    overrides[key] = float(value)
+                except ValueError:
+                    overrides[key] = value
+    return overrides
 
 
 def get_inference_backend(policy_path: str):
@@ -138,6 +168,9 @@ def main(argv):
             logger.error("Please specify a policy using --policy flag or train a model first")
             return
 
+    # Parse environment config overrides
+    env_cfg_override = _parse_env_cfg_overrides(_ENV_CFG.value) if _ENV_CFG.value else None
+
     backend = get_inference_backend(policy_path)
 
     if backend == "jax":
@@ -145,7 +178,7 @@ def main(argv):
         from motrix_rl.skrl.jax.train import ppo
 
         config.jax.backend = "jax"  # or "numpy"
-        trainer = ppo.Trainer(env_name, sim_backend, cfg_override=rl_override, enable_render=enable_render)
+        trainer = ppo.Trainer(env_name, sim_backend, cfg_override=rl_override, enable_render=enable_render, env_cfg_override=env_cfg_override)
         trainer.play(policy_path)
 
     elif backend == "torch":
@@ -153,7 +186,7 @@ def main(argv):
         from motrix_rl.skrl.torch.train import ppo
 
         config.torch.backend = "torch"
-        trainer = ppo.Trainer(env_name, sim_backend, cfg_override=rl_override, enable_render=enable_render)
+        trainer = ppo.Trainer(env_name, sim_backend, cfg_override=rl_override, enable_render=enable_render, env_cfg_override=env_cfg_override)
         trainer.play(policy_path)
 
 

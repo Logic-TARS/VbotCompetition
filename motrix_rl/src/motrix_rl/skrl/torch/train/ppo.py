@@ -155,6 +155,7 @@ class Trainer:
         sim_backend: str = None,
         enable_render: bool = False,
         cfg_override: dict = None,
+        env_cfg_override: dict = None,
     ) -> None:
         rlcfg = registry.default_rl_cfg(env_name, "skrl", backend="torch")
         if cfg_override is not None:
@@ -163,18 +164,38 @@ class Trainer:
         self._env_name = env_name
         self._sim_backend = sim_backend
         self._enable_render = enable_render
+        self._env_cfg_override = env_cfg_override
 
-    def train(self) -> None:
+    def train(self, policy: str = None) -> None:
         """
         Start training the agent.
+
+        Args:
+            policy: Optional path to pre-trained checkpoint (.pt) for
+                    curriculum/transfer learning. The agent will load these
+                    weights before training begins.
         """
         rlcfg = self._rlcfg
-        env = env_registry.make(self._env_name, sim_backend=self._sim_backend, num_envs=rlcfg.num_envs)
+        env = env_registry.make(
+            self._env_name,
+            sim_backend=self._sim_backend,
+            num_envs=rlcfg.num_envs,
+            env_cfg_override=self._env_cfg_override,
+        )
         set_seed(rlcfg.seed)
         skrl_env = wrap_env(env, self._enable_render)
         models = self._make_model(skrl_env, rlcfg)
         ppo_cfg = _get_cfg(rlcfg, skrl_env, log_dir=get_log_dir(self._env_name))
         agent = self._make_agent(models, skrl_env, ppo_cfg)
+
+        # Load pre-trained weights for curriculum/transfer learning
+        if policy is not None:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Loading pre-trained policy from: {policy}")
+            agent.load(policy)
+            logger.info("Pre-trained policy loaded successfully. Starting curriculum training.")
+
         cfg_trainer = {
             "timesteps": rlcfg.max_batch_env_steps,
             "headless": not self._enable_render,
@@ -186,7 +207,7 @@ class Trainer:
         import time
 
         rlcfg = self._rlcfg
-        env = env_registry.make(self._env_name, sim_backend=self._sim_backend, num_envs=rlcfg.play_num_envs)
+        env = env_registry.make(self._env_name, sim_backend=self._sim_backend, num_envs=rlcfg.play_num_envs, env_cfg_override=self._env_cfg_override)
         set_seed(rlcfg.seed)
         env = wrap_env(env, self._enable_render)
         models = self._make_model(env, rlcfg)

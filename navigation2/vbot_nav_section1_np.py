@@ -24,7 +24,7 @@ from motrix_envs.np.env import NpEnv, NpEnvState
 from .cfg import VBotNavSection1EnvCfg
 
 
-@registry.env("vbot_nav_section1", "np")
+@registry.env("vbot_navigation_section1", "np")
 class VBotNavSection1Env(NpEnv):
     """
     VBot Navigation Section 1 Competition Environment

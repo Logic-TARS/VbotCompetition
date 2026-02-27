@@ -37,6 +37,36 @@ _RAND_SEED = flags.DEFINE_bool("rand-seed", False, "Generate random seed")
 _CHECKPOINT_INTERVAL = flags.DEFINE_integer(
     "checkpoint-interval", None, "Checkpoint save interval in timesteps (default: use config value, typically 1000)"
 )
+_POLICY = flags.DEFINE_string(
+    "policy", None, "Path to pre-trained policy checkpoint (.pickle/.pt) for curriculum/transfer learning"
+)
+_ENV_CFG = flags.DEFINE_multi_string(
+    "env-cfg", [], "Environment config overrides in key=value format (e.g. --env-cfg curriculum_from_001=True)"
+)
+
+
+def _parse_env_cfg_overrides(env_cfg_flags: list[str]) -> dict:
+    """Parse --env-cfg key=value pairs into a dictionary."""
+    overrides = {}
+    for item in env_cfg_flags:
+        if "=" not in item:
+            raise ValueError(f"Invalid --env-cfg format: '{item}'. Expected key=value.")
+        key, value = item.split("=", 1)
+        key = key.strip()
+        # Auto-convert common types
+        if value.lower() in ("true", "yes", "1"):
+            overrides[key] = True
+        elif value.lower() in ("false", "no", "0"):
+            overrides[key] = False
+        else:
+            try:
+                overrides[key] = int(value)
+            except ValueError:
+                try:
+                    overrides[key] = float(value)
+                except ValueError:
+                    overrides[key] = value
+    return overrides
 
 
 def get_train_backend(supports: utils.DeviceSupports):
@@ -71,6 +101,12 @@ def main(argv):
     if _CHECKPOINT_INTERVAL.present:
         rl_override["check_point_interval"] = _CHECKPOINT_INTERVAL.value
 
+    # Parse environment config overrides (e.g. --env-cfg curriculum_from_001=True)
+    env_cfg_override = _parse_env_cfg_overrides(_ENV_CFG.value) if _ENV_CFG.value else None
+
+    # Pre-trained policy for curriculum/transfer learning
+    policy_path = _POLICY.value
+
     sim_backend = _SIM_BACKEND.value
     train_backend = "jax"
     if not _TRAIN_BACKEND.present:
@@ -83,17 +119,27 @@ def main(argv):
         from motrix_rl.skrl.jax.train import ppo
 
         config.jax.backend = "jax"  # or "numpy"
-        trainer = ppo.Trainer(env_name, sim_backend, cfg_override=rl_override, enable_render=enable_render)
+        trainer = ppo.Trainer(
+            env_name, sim_backend,
+            cfg_override=rl_override,
+            enable_render=enable_render,
+            env_cfg_override=env_cfg_override,
+        )
 
     elif train_backend == "torch":
         from motrix_rl.skrl.torch.train import ppo
 
         config.torch.backend = "torch"
-        trainer = ppo.Trainer(env_name, sim_backend, cfg_override=rl_override, enable_render=enable_render)
+        trainer = ppo.Trainer(
+            env_name, sim_backend,
+            cfg_override=rl_override,
+            enable_render=enable_render,
+            env_cfg_override=env_cfg_override,
+        )
     else:
         raise Exception(f"Unknown train backend: {train_backend}")
 
-    trainer.train()
+    trainer.train(policy=policy_path)
 
 
 if __name__ == "__main__":
