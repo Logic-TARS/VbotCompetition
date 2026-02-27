@@ -512,15 +512,19 @@ class VBotSection011EnvCfg(VBotStairsEnvCfg):
 #通过 @registry.envcfg("vbot_navigation_section012") 注册
 @dataclass
 class VBotSection012EnvCfg(VBotStairsEnvCfg):
-    """VBot Section01单独训练配置 - 高台楼梯地形"""
+    """VBot Section012 竞赛任务配置 - 完整赛道导航（2026平台 → 丙午大吉平台）"""
     model_file: str = os.path.dirname(__file__) + "/xmls/scene_section012.xml"
-    max_episode_seconds: float = 40.0  # 拉长一倍：从20秒增加到40秒
-    max_episode_steps: int = 4000  # 拉长一倍：从2000步增加到4000步
+    max_episode_seconds: float = 120.0  # 完整赛道需要充足时间
+    max_episode_steps: int = 12000  # 120秒 @ 100Hz
     @dataclass
     class InitState:
-        # 起始位置：随机化范围内生成
-        pos = [-2.5, 15.0, 3.3]  # 中心位置
-        pos_randomization_range = [-0., -0., 0., 0.]  # X±0.5m, Y±0.5m随机
+        # 起始位置："2026"平台中心
+        # 平台box中心Z=1.044, 半高0.25 → 表面Z=1.294
+        # 机器人站立高度0.462 → 出生Z = 1.294 + 0.462 = 1.756
+        pos = [0.0, 10.33, 1.756]
+        # 位置随机化范围 [x_min, y_min, x_max, y_max]，相对于pos中心的偏移
+        # 平台X范围: -5.0~5.0, Y范围: 8.83~11.83
+        pos_randomization_range = [-3.0, -1.0, 3.0, 1.0]
 
         default_joint_angles = {
             "FR_hip_joint": -0.0,
@@ -538,14 +542,9 @@ class VBotSection012EnvCfg(VBotStairsEnvCfg):
         }
     @dataclass
     class Commands:
-        # 目标位置：缩短距离，固定目标点
-        # 起始位置Y=-2.4, 目标Y=3.6, 距离=6米（与vbot_np相近）
-        # pose_command_range = [0.0, 3.6, 0.0, 0.0, 3.6, 0.0]
-        # 原始配置（已注释）：
-        # 目标位置：固定在终止角范围远端（完全无随机化）
-        # 固定目标点: X=0, Y=10.2, Z=2 (Z通过XML控制)
-        # 起始位置Y=-2.4, 目标Y=10.2, 距离=12.6米
-        pose_command_range = [0.0, 10.2, 0.0, 0.0, 10.2, 0.0]
+        # 终点平台"丙午大吉"的绝对坐标 [x, y, yaw, x, y, yaw]
+        # 由于环境代码中直接使用FINISH_ZONE_CENTER，此处仅作参考
+        pose_command_range = [0.0, 24.3, 0.0, 0.0, 24.3, 0.0]
     @dataclass
     class ControlConfig:
         action_scale = 0.25
@@ -565,7 +564,7 @@ class VBotSection013EnvCfg(VBotStairsEnvCfg):
     class InitState:
         # 起始位置：随机化范围内生成
         pos = [0.0, 26.0, 3.3]  # 中心位置
-        pos_randomization_range = [-0., -0., 0., 0.]  # X±0.5m, Y±0.5m随机
+        pos_randomization_range = [-1.0, -0.5, 1.0, 0.5]  # X±1.0m, Y±0.5m随机（一票否决：位置必须随机）
 
         default_joint_angles = {
             "FR_hip_joint": -0.0,

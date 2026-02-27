@@ -511,6 +511,32 @@ class navigation:
         policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
         value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
 
+    @rlcfg("vbot_navigation_section012")
+    @dataclass
+    class VBotNavigationSection012PPOConfig(PPOCfg):
+        """VBot Section012竞赛完整赛道配置（2026平台→丙午大吉平台）"""
+        seed: int = 42
+        num_envs: int = 2048
+        play_num_envs: int = 16
+        max_env_steps: int = 1024 * 60_000
+        check_point_interval: int = 500
+
+        learning_rate: float = 3e-4
+        rollouts: int = 48
+        learning_epochs: int = 6
+        mini_batches: int = 32
+        discount_factor: float = 0.99
+        lambda_param: float = 0.95
+        grad_norm_clip: float = 1.0
+
+        ratio_clip: float = 0.2
+        value_clip: float = 0.2
+        clip_predicted_values: bool = True
+
+        # 网络结构与section011一致，支持课程学习迁移
+        policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+        value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+
     @rlcfg("vbot_navigation_long_course")
     @dataclass
     class VBotNavigationLongCoursePPOConfig(PPOCfg):

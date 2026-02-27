@@ -6,55 +6,7 @@ from motrix_envs import registry
 from motrix_envs.np.env import NpEnv, NpEnvState
 from motrix_envs.math.quaternion import Quaternion
 
-from .cfg import VBotSection013EnvCfg
-
-
-# ==================== 竞赛场景常量 ====================
-
-# 终点平台（"中国结"）- 视觉模型中心 (0, 32.3)
-FINISH_ZONE_CENTER = np.array([0.0, 32.3], dtype=np.float32)
-FINISH_ZONE_RADIUS = 1.5  # 终点判定半径（m），身体任何部位进入即算到达
-
-# Y轴方向检查点（递增排列，机器人Y坐标超过后获得一次性奖励）
-# 对应赛道进度：离开起始平台 → 进入中间区域 → 穿越随机地形 → 进入球区 → 接近终点
-CHECKPOINTS_Y = np.array([27.5, 29.0, 30.5, 32.0], dtype=np.float32)
-CHECKPOINT_BONUS = 3.0
-
-# 金球位置（滚动球障碍），来自0126_C_section03.xml
-GOLD_BALL_POSITIONS = np.array([
-    [3.0, 31.23],
-    [0.0, 31.23],
-    [-3.0, 31.23],
-], dtype=np.float32)
-GOLD_BALL_CONTACT_RADIUS = 1.5  # 判定与球接触的半径
-BALL_SURVIVAL_BONUS = 5.0  # 碰到球但不倒的额外奖励（抗冲击路线）
-
-# 随机地形区域（heightfield centered at Y≈29.33）
-RANDOM_TERRAIN_PASSED_Y = 30.5  # Y坐标超过此值视为穿越随机地形
-RANDOM_TERRAIN_BONUS = 5.0
-
-# 赛道边界（来自XML中的bianjie碰撞体）
-BOUNDARY_X_MIN = -4.9
-BOUNDARY_X_MAX = 4.9
-BOUNDARY_Y_MIN = 24.5
-BOUNDARY_Y_MAX = 35.0
-
-# 物理检测参数
-FALL_THRESHOLD_ROLL_PITCH = np.deg2rad(45.0)  # roll/pitch超过45°视为摔倒
-MIN_STANDING_HEIGHT_RATIO = 0.4  # 低于目标高度40%视为趴下
-GRACE_PERIOD_STEPS = 10  # 重置后的物理宽限期（步数）
-
-# 庆祝参数
-CELEBRATION_DURATION = 2.0  # 需要在终点停留的时间（秒）
-
-# 奖励参数
-FINISH_BONUS = 20.0  # 到达中国结平台
-CELEBRATION_BONUS = 5.0  # 庆祝动作
-TERMINATION_PENALTY = -200.0  # 摔倒/越界惩罚
-HEIGHT_REWARD_SCALE = 2.0
-HEIGHT_REWARD_SIGMA = 0.05
-FORWARD_VEL_SCALE = 1.0
-PROGRESS_SCALE = 2.0
+from .cfg import VBotSection012EnvCfg
 
 
 def generate_repeating_array(num_period, num_reset, period_counter):
@@ -70,15 +22,15 @@ def generate_repeating_array(num_period, num_reset, period_counter):
     return np.array(idx)
 
 
-@registry.env("vbot_navigation_section013", "np")
-class VBotSection013Env(NpEnv):
+@registry.env("vbot_navigation_section012", "np")
+class VBotSection012Env(NpEnv):
     """
-    VBot在Section013地形上的导航任务
-    继承自NpEnv，使用VBotSection013EnvCfg配置
+    VBot在Section012地形上的导航任务
+    继承自NpEnv，使用VBotSection012EnvCfg配置
     """
-    _cfg: VBotSection013EnvCfg
+    _cfg: VBotSection012EnvCfg
     
-    def __init__(self, cfg: VBotSection013EnvCfg, num_envs: int = 1):
+    def __init__(self, cfg: VBotSection012EnvCfg, num_envs: int = 1):
         # 调用父类NpEnv初始化
         super().__init__(cfg, num_envs=num_envs)
         
@@ -121,12 +73,7 @@ class VBotSection013Env(NpEnv):
         
         # 初始位置生成参数：从配置文件读取
         self.spawn_center = np.array(cfg.init_state.pos, dtype=np.float32)  # 从配置读取
-        # 使用配置中的随机化范围 [x_min, y_min, x_max, y_max]
-        self.spawn_range = np.array(cfg.init_state.pos_randomization_range, dtype=np.float32)
-    
-        # 机器人站立目标高度（用于高度维持奖励和摔倒检测）
-        # 起始平台表面Z≈1.294, 机器人站立高度≈0.4m
-        self.base_height_target = 1.7
+        self.spawn_range = 0.1  # 随机生成范围：±0.1m（0.2m×0.2m区域）
     
         # 导航统计计数器
         self.navigation_stats_step = 0
@@ -412,8 +359,9 @@ class VBotSection013Env(NpEnv):
         heading_diff = np.where(heading_diff > np.pi, heading_diff - 2*np.pi, heading_diff)
         heading_diff = np.where(heading_diff < -np.pi, heading_diff + 2*np.pi, heading_diff)
         
-        # 达到判定（使用终点判定半径，与收集状态一致）
-        reached_all = distance_to_target < FINISH_ZONE_RADIUS
+        # 达到判定（只看位置，与奖励计算保持一致）
+        position_threshold = 0.3
+        reached_all = distance_to_target < position_threshold  # 楼梯任务：只要到达位置即可
         
         # 计算期望速度命令（与平地navigation一致，简单P控制器）
         desired_vel_xy = np.clip(position_error * 1.0, -1.0, 1.0)
@@ -481,26 +429,12 @@ class VBotSection013Env(NpEnv):
         base_lin_vel_xy = base_lin_vel[:, :2]
         self._update_heading_arrows(data, root_pos, desired_vel_xy, base_lin_vel_xy)
         
-        # 更新收集/进度状态（检查点、球接触、地形穿越、终点、庆祝）
-        self._update_collection_states(data, root_pos, state.info)
+        # 计算奖励
+        reward = self._compute_reward(data, state.info, velocity_commands)
         
-        # 计算奖励（传递root状态）
-        reward = self._compute_reward(data, state.info, root_pos, root_quat, root_vel)
-        
-        # 计算终止条件（完整的摔倒/越界/姿态/超时检测）
-        terminated = self._compute_terminated(data, state.info, root_pos, root_quat, root_vel)
-        
-        # 将终止惩罚叠加到奖励中
-        termination_penalty = state.info.get("termination_penalty", np.zeros(data.shape[0], dtype=np.float32))
-        reward = reward + termination_penalty
-        
-        # 更新时间和步数
-        state.info["time_elapsed"] = state.info.get(
-            "time_elapsed", np.zeros(data.shape[0], dtype=np.float32)
-        ) + self._cfg.sim_dt
-        state.info["steps"] = state.info.get(
-            "steps", np.zeros(data.shape[0], dtype=np.int32)
-        ) + 1
+        # 计算终止条件
+        terminated_state = self._compute_terminated(state)
+        terminated = terminated_state.terminated
         
         state.obs = obs
         state.reward = reward
@@ -508,328 +442,104 @@ class VBotSection013Env(NpEnv):
         
         return state
     
-    def _compute_terminated(self, data: mtx.SceneData, info: dict,
-                            root_pos: np.ndarray, root_quat: np.ndarray,
-                            root_vel: np.ndarray) -> np.ndarray:
+    def _compute_terminated(self, state: NpEnvState) -> NpEnvState:
         """
-        终止条件（满足任一则终止且施加重罚）：
-        1. 基座接触地面（摔倒）
-        2. 姿态失控（roll/pitch > 45°）
-        3. 越界（超出赛道范围）
-        4. 高度过低（≤ 40%目标高度 = 坍塌/趴下）
-        5. 关节速度异常（overflow / NaN / Inf）
-        6. episode超时
+        重写终止条件，与locomotion stairs完全一致
         """
-        n_envs = data.shape[0]
-        steps = info.get("steps", np.zeros(n_envs, dtype=np.int32))
-        in_grace = steps < GRACE_PERIOD_STEPS
+        data = state.data
         
-        # 1. 基座接触地面（摔倒）
+        # 基座接触地面终止（使用传感器）
         try:
             base_contact_value = self._model.get_sensor_value("base_contact", data)
             if base_contact_value.ndim == 0:
                 base_contact = np.array([base_contact_value > 0.01], dtype=bool)
-            elif base_contact_value.shape[0] != n_envs:
-                base_contact = np.full(n_envs, base_contact_value.flatten()[0] > 0.01, dtype=bool)
+            elif base_contact_value.shape[0] != self._num_envs:
+                base_contact = np.full(self._num_envs, base_contact_value.flatten()[0] > 0.01, dtype=bool)
             else:
-                base_contact = (base_contact_value > 0.01).flatten()[:n_envs]
-        except Exception:
-            base_contact = np.zeros(n_envs, dtype=bool)
+                base_contact = (base_contact_value > 0.01).flatten()[:self._num_envs]
+        except Exception as e:
+            print(f"[Warning] 无法读取base_contact传感器: {e}")
+            base_contact = np.zeros(self._num_envs, dtype=bool)
         
-        # 2. 姿态失控
-        qx, qy, qz, qw = root_quat[:, 0], root_quat[:, 1], root_quat[:, 2], root_quat[:, 3]
-        sinr_cosp = 2 * (qw * qx + qy * qz)
-        cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
-        roll = np.arctan2(sinr_cosp, cosr_cosp)
-        sinp = np.clip(2 * (qw * qy - qz * qx), -1.0, 1.0)
-        pitch = np.arcsin(sinp)
-        attitude_fail = (np.abs(roll) > FALL_THRESHOLD_ROLL_PITCH) | (np.abs(pitch) > FALL_THRESHOLD_ROLL_PITCH)
+        terminated = base_contact.copy()
         
-        # 3. 越界检测
-        out_of_bounds = (
-            (root_pos[:, 0] < BOUNDARY_X_MIN) |
-            (root_pos[:, 0] > BOUNDARY_X_MAX) |
-            (root_pos[:, 1] < BOUNDARY_Y_MIN) |
-            (root_pos[:, 1] > BOUNDARY_Y_MAX)
-        )
-        
-        # 4. 高度过低
-        height_too_low = root_pos[:, 2] < (self.base_height_target * MIN_STANDING_HEIGHT_RATIO)
-        
-        # 5. 关节速度异常
-        dof_vel = self.get_dof_vel(data)
-        if dof_vel.ndim > 1:
-            vel_max = np.abs(dof_vel).max(axis=1)
-            vel_nan_inf = np.isnan(dof_vel).any(axis=1) | np.isinf(dof_vel).any(axis=1)
-        else:
-            vel_max = np.abs(dof_vel)
-            vel_nan_inf = np.isnan(dof_vel) | np.isinf(dof_vel)
-        vel_overflow = vel_max > 100.0
-        
-        # 6. 超时
-        timeout = steps >= self._cfg.max_episode_steps
-        
-        # 综合：物理终止条件在宽限期内不生效
-        physical_termination = (
-            base_contact | attitude_fail | out_of_bounds |
-            height_too_low | vel_overflow | vel_nan_inf
-        ) & ~in_grace
-        
-        terminated = physical_termination | timeout
-        
-        # 物理终止施加重罚（超时不额外罚分）
-        info["termination_penalty"] = np.where(
-            physical_termination, TERMINATION_PENALTY, 0.0
-        ).astype(np.float32)
-        
-        return terminated
+        return state.replace(terminated=terminated)
     
-    # ==================== 收集/进度状态更新 ====================
-    
-    def _update_collection_states(self, data: mtx.SceneData,
-                                  root_pos: np.ndarray, info: dict):
+    def _compute_reward(self, data: mtx.SceneData, info: dict, velocity_commands: np.ndarray) -> np.ndarray:
         """
-        更新检查点、球接触、地形穿越、终点到达和庆祝状态
-        """
-        robot_xy = root_pos[:, :2]
-        robot_y = root_pos[:, 1]
-        n_envs = root_pos.shape[0]
-        
-        # ===== Y轴检查点 =====
-        checkpoints_reached = info["checkpoints_reached"]
-        for i, cp_y in enumerate(CHECKPOINTS_Y):
-            newly_reached = (robot_y >= cp_y) & ~checkpoints_reached[:, i]
-            checkpoints_reached[:, i] |= newly_reached
-        
-        # ===== 金球接触检测（2D距离检测，判定是否近距离接触过球） =====
-        ball_contacted = info["ball_contacted"]
-        for i, ball_pos in enumerate(GOLD_BALL_POSITIONS):
-            dist = np.linalg.norm(robot_xy - ball_pos, axis=-1)
-            newly_contacted = (dist < GOLD_BALL_CONTACT_RADIUS) & ~ball_contacted[:, i]
-            ball_contacted[:, i] |= newly_contacted
-        
-        # ===== 随机地形穿越检测 =====
-        terrain_passed = info["terrain_passed"]
-        newly_passed = (robot_y >= RANDOM_TERRAIN_PASSED_Y) & ~terrain_passed
-        terrain_passed |= newly_passed
-        info["terrain_passed"] = terrain_passed
-        
-        # ===== 终点到达检测（身体任何部位进入中国结区域即算到达） =====
-        finish_dist = np.linalg.norm(robot_xy - FINISH_ZONE_CENTER, axis=-1)
-        finish_reached = info["finish_reached"]
-        newly_finished = (finish_dist < FINISH_ZONE_RADIUS) & ~finish_reached
-        finish_reached |= newly_finished
-        info["finish_reached"] = finish_reached
-        
-        # 庆祝计时开始
-        time_elapsed = info.get("time_elapsed", np.zeros(n_envs, dtype=np.float32))
-        celebration_start = info["celebration_start_time"]
-        for idx in np.where(newly_finished)[0]:
-            if celebration_start[idx] < 0:
-                celebration_start[idx] = time_elapsed[idx]
-        
-        # 庆祝完成检测：到达终点后停留指定时间并有明显关节运动
-        celebration_completed = info["celebration_completed"]
-        joint_vel = self.get_dof_vel(data)
-        for idx in range(n_envs):
-            if finish_reached[idx] and not celebration_completed[idx] and celebration_start[idx] >= 0:
-                elapsed = time_elapsed[idx] - celebration_start[idx]
-                if finish_dist[idx] < FINISH_ZONE_RADIUS:
-                    # 在终点区域内，检查是否有明显的关节运动（庆祝动作）
-                    joint_speed = np.linalg.norm(joint_vel[idx])
-                    if elapsed >= CELEBRATION_DURATION and joint_speed > 0.1:
-                        celebration_completed[idx] = True
-                else:
-                    # 离开终点区域，重置计时
-                    celebration_start[idx] = time_elapsed[idx]
-    
-    def _compute_reward(self, data: mtx.SceneData, info: dict,
-                        root_pos: np.ndarray, root_quat: np.ndarray,
-                        root_vel: np.ndarray) -> np.ndarray:
-        """
-        Section013 导航任务奖励计算
-        
-        组成：
-        1. 站立高度维持（高斯核） — 防止趴下
-        2. Y方向前进速度 — 鼓励前进
-        3. Y坐标增量 — 进度奖励
-        4. 终点距离缩减 — 全局引导
-        5. 检查点到达（一次性）
-        6. 滚动球抗冲击存活奖励（一次性）
-        7. 随机地形穿越奖励（一次性）
-        8. 终点到达（一次性）
-        9. 庆祝完成（一次性）
-        10. 稳定性惩罚
+        导航任务奖励计算
         """
         cfg = self._cfg
-        n_envs = data.shape[0]
-        reward = np.zeros(n_envs, dtype=np.float32)
         
-        base_lin_vel = root_vel[:, :3]
-        base_height = root_pos[:, 2]
-        gyro = self._model.get_sensor_value(cfg.sensor.base_gyro, data)
-        robot_y = root_pos[:, 1]
-        robot_xy = root_pos[:, :2]
+        # 计算总奖励
+        reward = np.array([0])
         
-        # 判断是否站立
-        is_standing = base_height > (self.base_height_target * 0.6)
-        standing_mask = is_standing.astype(np.float32)
-        
-        # ============ 1. 站立高度维持（高斯核奖励） ============
-        height_error_sq = np.square(base_height - self.base_height_target)
-        reward += HEIGHT_REWARD_SCALE * np.exp(-height_error_sq / HEIGHT_REWARD_SIGMA)
-        
-        # 存活奖励（站立+0.01，趴下-0.02）
-        reward += np.where(is_standing, 0.01, -0.02)
-        
-        # ============ 2. Y方向前进速度奖励 ============
-        forward_vel_y = base_lin_vel[:, 1]
-        reward += FORWARD_VEL_SCALE * np.clip(forward_vel_y, -0.3, 1.5) * standing_mask
-        
-        # ============ 3. Y坐标进度奖励 ============
-        last_y = info.get("last_y", robot_y.copy())
-        delta_y = robot_y - last_y
-        reward += PROGRESS_SCALE * np.clip(delta_y, -0.05, 0.3) * standing_mask
-        info["last_y"] = robot_y.copy()
-        
-        # ============ 4. 终点距离缩减奖励 ============
-        distance_to_target = np.linalg.norm(robot_xy - FINISH_ZONE_CENTER, axis=-1)
-        last_dist = info.get("last_distance_to_finish", distance_to_target.copy())
-        dist_reduction = last_dist - distance_to_target
-        reward += np.clip(dist_reduction * 0.5, -0.05, 0.3)
-        info["last_distance_to_finish"] = distance_to_target.copy()
-        
-        # ============ 5. 检查点奖励（一次性） ============
-        cp_reached = info["checkpoints_reached"]
-        cp_rewarded = info["checkpoints_rewarded"]
-        for i in range(len(CHECKPOINTS_Y)):
-            newly = cp_reached[:, i] & ~cp_rewarded[:, i]
-            reward += newly.astype(np.float32) * CHECKPOINT_BONUS
-            cp_rewarded[:, i] |= newly
-        
-        # ============ 6. 滚动球抗冲击存活奖励（一次性） ============
-        # 碰到球但依然站立 → 获得额外奖励（抗冲击路线 +15 vs 避障路线 +10）
-        ball_contacted = info["ball_contacted"]
-        ball_survival_rewarded = info["ball_survival_rewarded"]
-        for i in range(len(GOLD_BALL_POSITIONS)):
-            newly = ball_contacted[:, i] & ~ball_survival_rewarded[:, i] & is_standing
-            reward += newly.astype(np.float32) * BALL_SURVIVAL_BONUS
-            ball_survival_rewarded[:, i] |= newly
-        
-        # ============ 7. 随机地形穿越奖励（一次性） ============
-        terrain_passed = info["terrain_passed"]
-        terrain_rewarded = info["terrain_rewarded"]
-        newly_terrain = terrain_passed & ~terrain_rewarded
-        reward += newly_terrain.astype(np.float32) * RANDOM_TERRAIN_BONUS
-        terrain_rewarded |= newly_terrain
-        info["terrain_rewarded"] = terrain_rewarded
-        
-        # ============ 8. 终点到达奖励（一次性） ============
-        finish_reached = info["finish_reached"]
-        finish_rewarded = info["finish_rewarded"]
-        newly_finish = finish_reached & ~finish_rewarded
-        reward += newly_finish.astype(np.float32) * FINISH_BONUS
-        finish_rewarded |= newly_finish
-        info["finish_rewarded"] = finish_rewarded
-        
-        # ============ 9. 庆祝完成奖励（一次性） ============
-        celebration_completed = info["celebration_completed"]
-        celebration_rewarded = info["celebration_rewarded"]
-        newly_celebration = celebration_completed & ~celebration_rewarded
-        reward += newly_celebration.astype(np.float32) * CELEBRATION_BONUS
-        celebration_rewarded |= newly_celebration
-        info["celebration_rewarded"] = celebration_rewarded
-        
-        # ============ 稳定性惩罚 ============
-        # 姿态惩罚（roll/pitch）
-        qx, qy, qz, qw = root_quat[:, 0], root_quat[:, 1], root_quat[:, 2], root_quat[:, 3]
-        sinr_cosp = 2 * (qw * qx + qy * qz)
-        cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
-        roll = np.arctan2(sinr_cosp, cosr_cosp)
-        sinp = np.clip(2 * (qw * qy - qz * qx), -1.0, 1.0)
-        pitch = np.arcsin(sinp)
-        reward += (np.abs(roll) + np.abs(pitch)) * -0.5
-        
-        # 垂直速度惩罚
-        reward += np.square(base_lin_vel[:, 2]) * -0.5
-        
-        # XY角速度惩罚
-        reward += np.sum(np.square(gyro[:, :2]), axis=-1) * -0.05
-        
-        # 动作变化率惩罚
-        current_actions = info["current_actions"]
-        last_actions = info.get("last_actions", current_actions)
-        action_rate = np.sum(np.square(current_actions - last_actions), axis=-1)
-        reward += action_rate * -0.01
-        
-        # 力矩惩罚
-        reward += np.sum(np.square(data.actuator_ctrls), axis=-1) * -1e-5
-        
-        # 关节速度惩罚
-        joint_vel = self.get_dof_vel(data)
-        reward += np.sum(np.square(joint_vel), axis=-1) * -5e-5
-        
-        # NaN保护
-        reward = np.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=-10.0)
         return reward
 
     def reset(self, data: mtx.SceneData, done: np.ndarray = None) -> tuple[np.ndarray, dict]:
-        """
-        重置环境
-        
-        关键要求：机器人初始位置必须随机分布在"丙午大吉"平台上（一票否决项）
-        """
-        cfg: VBotSection013EnvCfg = self._cfg
+        cfg: VBotSection01EnvCfg = self._cfg
         num_envs = data.shape[0]
         
-        # ===== 在"丙午大吉"平台上随机生成位置 =====
-        # spawn_range = [x_min, y_min, x_max, y_max] 相对于spawn_center的偏移
-        random_offset = np.random.uniform(
-            low=self.spawn_range[:2],    # [x_min, y_min] 偏移
-            high=self.spawn_range[2:],   # [x_max, y_max] 偏移
+        # 在高台中央小范围内随机生成位置
+        # X, Y: 在spawn_center周围 ±spawn_range 范围内随机
+        random_xy = np.random.uniform(
+            low=-self.spawn_range,
+            high=self.spawn_range,
             size=(num_envs, 2)
         )
-        robot_init_xy = self.spawn_center[:2] + random_offset  # [num_envs, 2]
-        terrain_heights = np.full(num_envs, self.spawn_center[2], dtype=np.float32)
-        robot_init_xyz = np.column_stack([robot_init_xy, terrain_heights])  # [num_envs, 3]
+        robot_init_xy = self.spawn_center[:2] + random_xy  # [num_envs, 2]
+        terrain_heights = np.full(num_envs, self.spawn_center[2], dtype=np.float32)  # 使用配置的高度
         
-        # 随机初始朝向（大致朝向+Y方向 = 赛道前进方向）
-        spawn_yaw = np.random.uniform(-np.pi / 6, np.pi / 6, num_envs)
-        spawn_quat = np.array([self._euler_to_quat(0, 0, yaw) for yaw in spawn_yaw])
+        
+        # 组合XYZ坐标
+        robot_init_pos = robot_init_xy  # [num_envs, 2]
+        robot_init_xyz = np.column_stack([robot_init_xy, terrain_heights])  # [num_envs, 3]
         
         dof_pos = np.tile(self._init_dof_pos, (num_envs, 1))
         dof_vel = np.tile(self._init_dof_vel, (num_envs, 1))
         
-        # 设置 base 的 XYZ位置（DOF 3-5）和朝向（DOF 6-9）
-        dof_pos[:, 3:6] = robot_init_xyz
-        dof_pos[:, self._base_quat_start:self._base_quat_end] = spawn_quat
+        # 设置 base 的 XYZ位置（DOF 3-5）
+        dof_pos[:, 3:6] = robot_init_xyz  # [x, y, z] 随机生成的位置
         
-        # 目标位置：固定为中国结平台（绝对坐标）
-        target_positions = np.tile(FINISH_ZONE_CENTER, (num_envs, 1))  # [num_envs, 2]
-        target_headings = np.zeros((num_envs, 1), dtype=np.float32)   # 到达即可，朝向不限
+        target_offset = np.random.uniform(
+            low=cfg.commands.pose_command_range[:2],
+            high=cfg.commands.pose_command_range[3:5],
+            size=(num_envs, 2)
+        )
+        target_positions = robot_init_pos + target_offset
+        
+        target_headings = np.random.uniform(
+            low=cfg.commands.pose_command_range[2],
+            high=cfg.commands.pose_command_range[5],
+            size=(num_envs, 1)
+        )
+        
         pose_commands = np.concatenate([target_positions, target_headings], axis=1)
         
-        # 归一化所有四元数
+        # 归一化base的四元数（DOF 6-9）
         for env_idx in range(num_envs):
-            # base四元数
             quat = dof_pos[env_idx, self._base_quat_start:self._base_quat_end]
-            qn = np.linalg.norm(quat)
-            dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = (
-                quat / qn if qn > 1e-6 else np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
-            )
+            quat_norm = np.linalg.norm(quat)
+            if quat_norm > 1e-6:
+                dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = quat / quat_norm
+            else:
+                dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
             
-            # 箭头四元数（如果存在）
+            # 归一化箭头的四元数（如果箭头body存在）
             if self._robot_arrow_body is not None:
-                for start, end in [
-                    (self._robot_arrow_dof_start + 3, self._robot_arrow_dof_end),
-                    (self._desired_arrow_dof_start + 3, self._desired_arrow_dof_end),
-                ]:
-                    if end <= len(dof_pos[env_idx]):
-                        aq = dof_pos[env_idx, start:end]
-                        aqn = np.linalg.norm(aq)
-                        dof_pos[env_idx, start:end] = (
-                            aq / aqn if aqn > 1e-6 else np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
-                        )
+                robot_arrow_quat = dof_pos[env_idx, self._robot_arrow_dof_start+3:self._robot_arrow_dof_end]
+                quat_norm = np.linalg.norm(robot_arrow_quat)
+                if quat_norm > 1e-6:
+                    dof_pos[env_idx, self._robot_arrow_dof_start+3:self._robot_arrow_dof_end] = robot_arrow_quat / quat_norm
+                else:
+                    dof_pos[env_idx, self._robot_arrow_dof_start+3:self._robot_arrow_dof_end] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+                
+                desired_arrow_quat = dof_pos[env_idx, self._desired_arrow_dof_start+3:self._desired_arrow_dof_end]
+                quat_norm = np.linalg.norm(desired_arrow_quat)
+                if quat_norm > 1e-6:
+                    dof_pos[env_idx, self._desired_arrow_dof_start+3:self._desired_arrow_dof_end] = desired_arrow_quat / quat_norm
+                else:
+                    dof_pos[env_idx, self._desired_arrow_dof_start+3:self._desired_arrow_dof_end] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
         
         data.reset(self._model)
         data.set_dof_vel(dof_vel)
@@ -852,7 +562,7 @@ class VBotSection013Env(NpEnv):
         gyro = self._model.get_sensor_value(self._cfg.sensor.base_gyro, data)
         projected_gravity = self._compute_projected_gravity(root_quat)
         
-        # 计算速度命令（指向终点的P控制器）
+        # 计算速度命令
         robot_position = root_pos[:, :2]
         robot_heading = self._get_heading_from_quat(root_quat)
         target_position = pose_commands[:, :2]
@@ -861,7 +571,8 @@ class VBotSection013Env(NpEnv):
         position_error = target_position - robot_position
         distance_to_target = np.linalg.norm(position_error, axis=1)
         
-        reached_all = distance_to_target < FINISH_ZONE_RADIUS
+        position_threshold = 0.3
+        reached_all = distance_to_target < position_threshold  # 楼梯任务：只看位置
         
         # 计算期望速度
         desired_vel_xy = np.clip(position_error * 1.0, -1.0, 1.0)
@@ -874,15 +585,18 @@ class VBotSection013Env(NpEnv):
         heading_diff = np.where(heading_diff > np.pi, heading_diff - 2*np.pi, heading_diff)
         heading_diff = np.where(heading_diff < -np.pi, heading_diff + 2*np.pi, heading_diff)
         
-        # 角速度跟踪运动方向
+        # ===== 与reset一致：角速度跟踪运动方向 =====
+        # 计算期望的运动方向（从update_state中复制）
         desired_heading = np.arctan2(position_error[:, 1], position_error[:, 0])
         heading_to_movement = desired_heading - robot_heading
         heading_to_movement = np.where(heading_to_movement > np.pi, heading_to_movement - 2*np.pi, heading_to_movement)
         heading_to_movement = np.where(heading_to_movement < -np.pi, heading_to_movement + 2*np.pi, heading_to_movement)
         desired_yaw_rate = np.clip(heading_to_movement * 1.0, -1.0, 1.0)
         
+        # 添加死区，与update_state保持一致
         deadband_yaw = np.deg2rad(8)
         desired_yaw_rate = np.where(np.abs(heading_to_movement) < deadband_yaw, 0.0, desired_yaw_rate)
+        
         desired_yaw_rate = np.where(reached_all, 0.0, desired_yaw_rate)
         desired_vel_xy = np.where(reached_all[:, np.newaxis], 0.0, desired_vel_xy)
         
@@ -912,7 +626,7 @@ class VBotSection013Env(NpEnv):
             np.abs(gyro[:, 2]) < 5e-2
         )
         stop_ready_flag = stop_ready.astype(np.float32)
-        
+
         obs = np.concatenate(
             [
                 noisy_linvel,       # 3
@@ -923,50 +637,27 @@ class VBotSection013Env(NpEnv):
                 last_actions,       # 12
                 command_normalized, # 3
                 position_error_normalized,  # 2
-                heading_error_normalized[:, np.newaxis],  # 1
+                heading_error_normalized[:, np.newaxis],  # 1 - 最终朝向误差（保留）
                 distance_normalized[:, np.newaxis],  # 1
                 reached_flag[:, np.newaxis],  # 1
                 stop_ready_flag[:, np.newaxis],  # 1
             ],
             axis=-1,
         )
-        assert obs.shape == (num_envs, 54), f"Expected obs shape (*, 54), got {obs.shape}"
-        
-        # ===== 构建初始信息（包含所有追踪字段） =====
-        distance_to_finish = np.linalg.norm(robot_init_xy - FINISH_ZONE_CENTER, axis=-1)
+        print(f"obs.shape:{obs.shape}")
+        assert obs.shape == (num_envs, 54)  # 54 + 1 = 55维
         
         info = {
-            # 目标命令
             "pose_commands": pose_commands,
-            # 动作
             "last_actions": np.zeros((num_envs, self._num_action), dtype=np.float32),
+            "steps": np.zeros(num_envs, dtype=np.int32),
             "current_actions": np.zeros((num_envs, self._num_action), dtype=np.float32),
             "filtered_actions": np.zeros((num_envs, self._num_action), dtype=np.float32),
-            # 计步与计时
-            "steps": np.zeros(num_envs, dtype=np.int32),
-            "time_elapsed": np.zeros(num_envs, dtype=np.float32),
-            # Y进度追踪
-            "last_y": robot_init_xy[:, 1].copy(),
-            "last_distance_to_finish": distance_to_finish.copy(),
-            # 检查点（4个Y坐标里程碑）
-            "checkpoints_reached": np.zeros((num_envs, len(CHECKPOINTS_Y)), dtype=bool),
-            "checkpoints_rewarded": np.zeros((num_envs, len(CHECKPOINTS_Y)), dtype=bool),
-            # 滚动球接触检测（3个金球）
-            "ball_contacted": np.zeros((num_envs, len(GOLD_BALL_POSITIONS)), dtype=bool),
-            "ball_survival_rewarded": np.zeros((num_envs, len(GOLD_BALL_POSITIONS)), dtype=bool),
-            # 随机地形穿越
-            "terrain_passed": np.zeros(num_envs, dtype=bool),
-            "terrain_rewarded": np.zeros(num_envs, dtype=bool),
-            # 终点
-            "finish_reached": np.zeros(num_envs, dtype=bool),
-            "finish_rewarded": np.zeros(num_envs, dtype=bool),
-            # 庆祝
-            "celebration_start_time": np.full(num_envs, -1.0, dtype=np.float32),
-            "celebration_completed": np.zeros(num_envs, dtype=bool),
-            "celebration_rewarded": np.zeros(num_envs, dtype=bool),
-            # 物理
-            "last_dof_vel": np.zeros((num_envs, self._num_action), dtype=np.float32),
-            "contacts": np.zeros((num_envs, self.num_foot_check), dtype=np.bool_),
+            "ever_reached": np.zeros(num_envs, dtype=bool),
+            "min_distance": distance_to_target.copy(),  # 统一使用min_distance机制
+            # 新增：与locomotion一致的字段
+            "last_dof_vel": np.zeros((num_envs, self._num_action), dtype=np.float32),  # 上一步关节速度
+            "contacts": np.zeros((num_envs, self.num_foot_check), dtype=np.bool_),  # 足部接触状态
         }
         
         return obs, info
