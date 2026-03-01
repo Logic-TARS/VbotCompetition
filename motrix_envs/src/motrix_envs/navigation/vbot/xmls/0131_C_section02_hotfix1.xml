@@ -354,9 +354,22 @@
           <default class="C_stair_diji_002">
             <geom type="box" size="2.0 1.25 0.25" quat="0.948683298 -0.316227766 0.0 0.0" pos="-2.999999761581421 22.17962646484375 1.8440951108932495" density="1000.0"/>
           </default>
-          <!-- 平地：在"2026"平台南侧添加一块平坦地面，供机器人热身行走 -->
-          <default class="C_flat_ground_south">
-            <geom type="box" size="5.0 3.0 0.25" quat="1.0 0.0 0.0 0.0" pos="0.0 5.829627990722656 1.0440951585769653" density="1000.0"/>
+          <!-- Section01 结束区域碰撞（从 0126_C_section01.xml 复制） -->
+          <!-- 斜坡：从低处通向顶部平台 -->
+          <default class="C_Adiban_003">
+            <geom type="box" size="5.0 2.5 0.25" quat="0.9914449 0.1305262 0.0 0.0" pos="0.0 4.479518890380859 0.4055659770965576" density="1000.0"/>
+          </default>
+          <!-- 顶部平台：Section01 终点区域 Y≈[6.83, 8.83] -->
+          <default class="C_Adiban_004">
+            <geom type="box" size="5.0 1.0 0.25" quat="1.0 0.0 0.0 0.0" pos="0.0 7.8296284675598145 1.0440951585769653" density="1000.0"/>
+          </default>
+          <!-- 右侧边界墙 -->
+          <default class="C_Abianjie_002">
+            <geom type="box" size="0.25 3.4148149490356445 1.25" quat="1.0 0.0 0.0 0.0" pos="5.25 5.4148149490356445 1.22660493850708" density="1000.0"/>
+          </default>
+          <!-- 左侧边界墙 -->
+          <default class="C_Abianjie_004">
+            <geom type="box" size="0.25 3.4148149490356445 1.22660493850708" quat="1.0 0.0 0.0 0.0" pos="-5.25 5.4148149490356445 1.22660493850708" density="1000.0"/>
           </default>
       </default>
   </default>
@@ -393,8 +406,14 @@
         <geom class="C_Bdiban_003"/>
         <geom class="C_Bdiban_004"/>
         <geom class="C_Bdiban_005"/>
-        <!-- 南侧平地：Y范围 [2.83, 8.83]，与"2026"平台(Y=8.83~11.83)无缝衔接 -->
-        <geom class="C_flat_ground_south"/>
+        <!-- Section01 结束区域：斜坡 + 顶部平台 -->
+        <geom name="Adiban_003" class="C_Adiban_003"/>
+        <geom name="Adiban_004" class="C_Adiban_004"/>
+      </body>
+      <body name="B_Abianjie" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+        <!-- Section01 南侧边界墙 -->
+        <geom name="Abianjie_002" class="C_Abianjie_002"/>
+        <geom name="Abianjie_004" class="C_Abianjie_004"/>
       </body>
       <body name="B_Bdixing" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
         <geom name="V_Bdixing_Plane" type="hfield" hfield="hfield_terrain"

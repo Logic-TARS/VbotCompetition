@@ -120,8 +120,9 @@ class NpEnv(ABEnv):
             return
 
         np.putmask(state.info["steps"], done, 0)
-        np.putmask(state.terminated, done, False)
-        np.putmask(state.truncated, done, False)
+        # NOTE: 不要在此清除 terminated/truncated，它们需要保留给 SKRL agent
+        # 用于 episode 结束判定（记录 Total reward 等指标）。
+        # _prev_physics_step() 会在下一步开始时统一清零。
         data = state.data[done]
         obs, info1 = self.reset(data)
         state.obs[done] = obs

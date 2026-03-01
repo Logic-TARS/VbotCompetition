@@ -89,6 +89,7 @@ class Asset:
 class Sensor:
     base_linvel = "base_linvel"
     base_gyro = "base_gyro"
+    base_contact = "base_contact"  # 基座接触力传感器名称（用于摔倒检测）
     feet = ["FR", "FL", "RR", "RL"]  # 足部接触力传感器名称
 
 @dataclass
@@ -520,8 +521,9 @@ class VBotSection012EnvCfg(VBotStairsEnvCfg):
 
     # ===== 课程学习模式 =====
     # 设为True以兼容从section011预训练模型继续训练
-    # 开启后：观测归一化与section011一致（乘法归一化），PD力矩无限幅
-    # 关闭时：使用section012原生归一化（除法归一化），PD力矩有限幅
+    # 开启后：PD力矩无限幅（与section011一致）
+    # 关闭时：PD力矩有限幅 [17,17,34]*4（标准模式）
+    # 注意：观测归一化已统一为乘法缩放（与section001/011一致）
     curriculum_from_011: bool = False
 
     # ===== 崎岖地形适应 =====

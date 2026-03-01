@@ -78,9 +78,9 @@ class VBotSection001Env(NpEnv):
         cfg = self._cfg
         self.default_angles = np.zeros(self._num_action, dtype=np.float32)
 
-        # PD增益（从cfg获取或使用默认值）
-        self.kps = np.ones(self._num_action, dtype=np.float32) * getattr(cfg.control_config, 'stiffness', 80.0)
-        self.kds = np.ones(self._num_action, dtype=np.float32) * getattr(cfg.control_config, 'damping', 4.0)
+        # PD增益（与 section012 一致: stiffness=60, damping=0.8）
+        self.kp = float(getattr(cfg.control_config, 'stiffness', 60.0))
+        self.kv = float(getattr(cfg.control_config, 'damping', 0.8))
         self.gravity_vec = np.array([0, 0, -1], dtype=np.float32)
 
         # 归一化系数
@@ -143,25 +143,58 @@ class VBotSection001Env(NpEnv):
 
 
     def _find_target_marker_dof_indices(self):
-        """查找target_marker在dof_pos中的索引位置"""
+        """查找target_marker在dof_pos中的索引位置（与 section012 一致）
+
+        DOF layout:
+          0-2:  target_marker (slide x, slide y, hinge yaw)
+          3-5:  base position (x, y, z)
+          6-9:  base quaternion (qx, qy, qz, qw)
+          10-21: joint angles (12)
+        """
+        n_dof = self._model.num_dof_pos
+        n_actuators = self._model.num_actuators
+
         self._target_marker_dof_start = 0
         self._target_marker_dof_end = 3
-        self._init_dof_pos[0:3] = [0.0, 0.0, 0.0]
+        self._base_pos_start = 3
+        self._base_pos_end = 6
         self._base_quat_start = 6
         self._base_quat_end = 10
+        self._joint_dof_start = 10
+        self._joint_dof_end = 10 + n_actuators
+
+        self._init_dof_pos[0:3] = [0.0, 0.0, 0.0]
+
+        # 验证模型DOF布局是否匹配预期
+        expected_min = 3 + 7 + n_actuators  # marker(3) + base(7) + joints
+        assert n_dof >= expected_min, (
+            f"DOF layout mismatch: expected at least {expected_min} DOFs "
+            f"(3 marker + 7 base + {n_actuators} joints), got {n_dof}"
+        )
 
     def _find_arrow_dof_indices(self):
-        """查找箭头在dof_pos中的索引位置"""
-        self._robot_arrow_dof_start = 22
-        self._robot_arrow_dof_end = 29
-        self._desired_arrow_dof_start = 29
-        self._desired_arrow_dof_end = 36
+        """查找箭头在dof_pos中的索引位置（与 section012 一致: 基于 _joint_dof_end 推算）"""
+        arrow_base = self._joint_dof_end
+        self._robot_arrow_dof_start = arrow_base
+        self._robot_arrow_dof_end = arrow_base + 7
+        self._desired_arrow_dof_start = arrow_base + 7
+        self._desired_arrow_dof_end = arrow_base + 14
+
+        # 验证不越界
+        assert self._desired_arrow_dof_end <= self._model.num_dof_pos, (
+            f"Arrow DOF range [{self._robot_arrow_dof_start}:{self._desired_arrow_dof_end}] "
+            f"exceeds model DOF count {self._model.num_dof_pos}"
+        )
 
         arrow_init_height = self._cfg.init_state.pos[2] + 0.5
         if self._robot_arrow_dof_end <= len(self._init_dof_pos):
-            self._init_dof_pos[self._robot_arrow_dof_start:self._robot_arrow_dof_end] = [0.0, 0.0, arrow_init_height, 0.0, 0.0, 0.0, 1.0]
+            self._init_dof_pos[self._robot_arrow_dof_start:self._robot_arrow_dof_end] = [
+                0.0, 0.0, arrow_init_height, 0.0, 0.0, 0.0, 1.0
+            ]
         if self._desired_arrow_dof_end <= len(self._init_dof_pos):
-            self._init_dof_pos[self._desired_arrow_dof_start:self._desired_arrow_dof_end] = [0.0, 0.0, arrow_init_height, 0.0, 0.0, 0.0, 1.0]
+            self._init_dof_pos[self._desired_arrow_dof_start:self._desired_arrow_dof_end] = [
+                0.0, 0.0, arrow_init_height, 0.0, 0.0, 0.0, 1.0
+            ]
 
     def _init_foot_contact(self):
         """初始化足部接触检测（与 vbot_nav_flat_np 一致）"""
@@ -275,11 +308,19 @@ class VBotSection001Env(NpEnv):
         return state
 
     def _compute_torques(self, actions, data):
-        """计算PD控制力矩 (与 walk_np/vbot_nav_flat_np 一致)"""
-        actions_scaled = actions * self._cfg.control_config.action_scale
-        torques = self.kps * (
-            actions_scaled + self.default_angles - self.get_dof_pos(data)
-        ) - self.kds * self.get_dof_vel(data)
+        """PD力矩控制（与 section012 一致: stiffness=60, damping=0.8, 限幅 [17,17,34]*4）"""
+        action_scaled = actions * self._cfg.control_config.action_scale
+        target_pos = self.default_angles + action_scaled
+
+        current_pos = self.get_dof_pos(data)
+        current_vel = self.get_dof_vel(data)
+
+        pos_error = target_pos - current_pos
+        torques = self.kp * pos_error - self.kv * current_vel
+
+        # 限幅保护（与 section012 标准模式一致）
+        torque_limits = np.array([17, 17, 34] * 4, dtype=np.float32)
+        torques = np.clip(torques, -torque_limits, torque_limits)
         return torques
 
     def _compute_projected_gravity(self, root_quat: np.ndarray) -> np.ndarray:
@@ -524,8 +565,7 @@ class VBotSection001Env(NpEnv):
         # ===== 计算奖励 =====
         reward = self._compute_reward(data, state.info, velocity_commands, terminated)
 
-        # 更新步数
-        state.info["steps"] = state.info.get("steps", np.zeros(self._num_envs, dtype=np.int32)) + 1
+        # steps 由基类 step() 统一递增，此处不重复递增（与 section012 一致）
 
         state.obs = obs
         state.reward = reward
@@ -921,8 +961,8 @@ class VBotSection001Env(NpEnv):
             push_xy *= self.random_push_scale
             dof_vel[:, 3:5] = push_xy
 
-        # 设置 base 的 XYZ位置(DOF 3-5)
-        dof_pos[:, 3:6] = robot_init_pos
+        # 设置 base 的 XYZ位置（使用命名索引，与 section012 一致）
+        dof_pos[:, self._base_pos_start:self._base_pos_end] = robot_init_pos
 
         # 目标位置设定：固定为圆心(比赛规则)
         # 所有机器狗都以圆心为目标，不使用随机偏移
