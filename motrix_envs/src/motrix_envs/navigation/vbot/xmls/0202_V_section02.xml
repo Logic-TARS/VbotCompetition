@@ -60,6 +60,8 @@
       <layer texture="stepblock_BK_Bake1_CyclesBake_COMBINED" role="rgb"/>
     </material>
     <material name="MI_RED" rgba="0.5906158089637756 0.008023164235055447 0.001517647528089583 1.0" reflectance="0.5" metallic="0.0" roughness="1.0"/>
+    <!-- 南侧平地材质 -->
+    <material name="MI_flat_ground_south" rgba="0.55 0.55 0.52 1.0" reflectance="0.3" metallic="0.0" roughness="0.9"/>
 
     <!-- Visual meshes -->
     <mesh class="visual" name="V_Cone_BK" file="V_Cone_BK.obj"/>
@@ -116,6 +118,8 @@
       <geom class="visual" mesh="V_Section_2_terrain_BK" pos="4.76837158203125e-07 10.329628944396973 1.2940952777862549" quat="1.0 0.0 0.0 0.0" material="MI_Section_2_terrain_BK"/>
       <geom class="visual" mesh="V_stepblock_BK" pos="-0.47903966903686523 17.337711334228516 1.8420194387435913" quat="1.0 0.0 0.0 0.0" material="MI_stepblock_BK"/>
       <geom class="visual" mesh="V_stepblock_outline" pos="-0.47903966903686523 17.337711334228516 1.8420194387435913" quat="1.0 0.0 0.0 0.0" material="MI_RED"/>
+      <!-- 南侧平地可视体 -->
+      <geom type="box" size="5.0 3.0 0.25" pos="0.0 5.829627990722656 1.0440951585769653" quat="1.0 0.0 0.0 0.0" contype="0" conaffinity="0" group="2" density="0" material="MI_flat_ground_south"/>
     </body>
   </worldbody>
 </mujoco>

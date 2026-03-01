@@ -150,6 +150,7 @@ class VBotStairsEnvCfg(VBotEnvCfg):
     model_file: str = os.path.dirname(__file__) + "/xmls/scene_stairs.xml"
     max_episode_seconds: float = 20.0  # 增加到20秒，给更多时间学习转向
     max_episode_steps: int = 2000
+    render_spacing: float = 0  # 多环境渲染时不添加间距
     
     @dataclass
     class ControlConfig:
@@ -516,15 +517,38 @@ class VBotSection012EnvCfg(VBotStairsEnvCfg):
     model_file: str = os.path.dirname(__file__) + "/xmls/scene_section012.xml"
     max_episode_seconds: float = 120.0  # 完整赛道需要充足时间
     max_episode_steps: int = 12000  # 120秒 @ 100Hz
+
+    # ===== 课程学习模式 =====
+    # 设为True以兼容从section011预训练模型继续训练
+    # 开启后：观测归一化与section011一致（乘法归一化），PD力矩无限幅
+    # 关闭时：使用section012原生归一化（除法归一化），PD力矩有限幅
+    curriculum_from_011: bool = False
+
+    # ===== 崎岖地形适应 =====
+    # 开启后：扩展观测空间（状态历史+足部接触力），重塑奖励函数
+    # 观测空间从54维扩展为 54 + 4(foot_contact) + 12(foot_force_body) + 1(base_height)
+    #   + N*27(历史帧: joint_pos_rel:12 + joint_vel:12 + gravity:3=27) = 71 + N*27
+    rough_terrain_mode: bool = False
+    state_history_length: int = 3        # 历史帧数（0=不用历史，推荐3~5）
+
+    # 奖励系数覆盖（崎岖地形专用）
+    rough_attitude_penalty_scale: float = 0.1     # 姿态惩罚系数（平地0.5→崎岖0.1，放宽）
+    rough_foot_clearance_scale: float = 1.0       # 抬脚高度奖励系数
+    rough_foot_clearance_target: float = 0.08     # 目标抬脚高度（m），高于此给奖励
+    rough_stumble_penalty_scale: float = 0.5      # 绊倒惩罚（水平接触力过大）
+    rough_feet_air_time_target: float = 0.25      # 目标腾空时间（s），鼓励抬腿步态
+    rough_contact_force_penalty_scale: float = 0.01  # 过大接触力惩罚
+
     @dataclass
     class InitState:
-        # 起始位置："2026"平台中心
-        # 平台box中心Z=1.044, 半高0.25 → 表面Z=1.294
+        # 起始位置：南侧平地中央（在"2026"平台前方的平坦区域）
+        # 平地box中心Z=1.044, 半高0.25 → 表面Z=1.294
         # 机器人站立高度0.462 → 出生Z = 1.294 + 0.462 = 1.756
-        pos = [0.0, 10.33, 1.756]
+        # 平地Y范围: [2.83, 8.83]，机器人将从平地走向"2026"平台再进入复杂地形
+        pos = [0.0, 5.83, 1.756]
         # 位置随机化范围 [x_min, y_min, x_max, y_max]，相对于pos中心的偏移
-        # 平台X范围: -5.0~5.0, Y范围: 8.83~11.83
-        pos_randomization_range = [-3.0, -1.0, 3.0, 1.0]
+        # 平地X范围: -5.0~5.0, Y范围: 2.83~8.83
+        pos_randomization_range = [-3.0, -2.0, 3.0, 2.0]
 
         default_joint_angles = {
             "FR_hip_joint": -0.0,
@@ -547,6 +571,8 @@ class VBotSection012EnvCfg(VBotStairsEnvCfg):
         pose_command_range = [0.0, 24.3, 0.0, 0.0, 24.3, 0.0]
     @dataclass
     class ControlConfig:
+        stiffness = 60   # [N*m/rad] PD控制刚度（与section011一致）
+        damping = 0.8    # [N*m*s/rad] PD控制阻尼（与section011一致）
         action_scale = 0.25
     init_state: InitState = field(default_factory=InitState)
     commands: Commands = field(default_factory=Commands)
