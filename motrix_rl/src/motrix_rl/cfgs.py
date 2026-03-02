@@ -537,21 +537,37 @@ class navigation:
         policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
         value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
 
-    @rlcfg("vbot_navigation_long_course")
+    @rlcfg("vbot_navigation_section013")
     @dataclass
-    class VBotNavigationLongCoursePPOConfig(PPOCfg):
-        """VBot完整三段赛道导航配置"""
+    class VBotNavigationSection013PPOConfig(PPOCfg):
+        """VBot Section013竞赛第三阶段配置（随机地形+金球障碍→终点平台）"""
         seed: int = 42
-        share_policy_value_features: bool = False
-        max_env_steps: int = 1024 * 60_000
         num_envs: int = 2048
+        play_num_envs: int = 16
+        max_env_steps: int = 1024 * 60_000
+        check_point_interval: int = 500
 
-        rollouts: int = 24
-        policy_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
-        value_hidden_layer_sizes: tuple[int, ...] = (512, 256, 128)
-        learning_epochs: int = 5
-        mini_batches: int = 3
         learning_rate: float = 3e-4
+        rollouts: int = 48
+        learning_epochs: int = 6
+        mini_batches: int = 32
+        discount_factor: float = 0.99
+        lambda_param: float = 0.95
+        grad_norm_clip: float = 1.0
+
+        ratio_clip: float = 0.2
+        value_clip: float = 0.2
+        clip_predicted_values: bool = True
+
+        # 网络结构与section012一致，支持课程学习迁移
+        policy_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+        value_hidden_layer_sizes: tuple[int, ...] = (256, 128, 64)
+
+    @rlcfg("vbot_navigation_full")
+    @dataclass
+    class VBotNavigationFullPPOConfig(VBotNavigationSection013PPOConfig):
+        """完整赛道版本（复用section013 PPO配置）"""
+        pass
 
     @rlcfg("vbot_navigation_section001")
     @dataclass

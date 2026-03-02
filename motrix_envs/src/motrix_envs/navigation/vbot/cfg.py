@@ -588,10 +588,22 @@ class VBotSection013EnvCfg(VBotStairsEnvCfg):
     model_file: str = os.path.dirname(__file__) + "/xmls/scene_section013.xml"
     max_episode_seconds: float = 40.0  # 拉长一倍：从20秒增加到40秒
     max_episode_steps: int = 4000  # 拉长一倍：从2000步增加到4000步
+
+    # ===== 崎岖地形适应（与section012一致） =====
+    rough_terrain_mode: bool = False
+    state_history_length: int = 3
+    rough_attitude_penalty_scale: float = 0.1
+    rough_foot_clearance_scale: float = 1.0
+    rough_foot_clearance_target: float = 0.08
+    rough_stumble_penalty_scale: float = 0.5
+    rough_feet_air_time_target: float = 0.25
+    rough_contact_force_penalty_scale: float = 0.01
+
     @dataclass
     class InitState:
         # 起始位置：随机化范围内生成
-        pos = [0.0, 26.0, 3.3]  # 中心位置
+        # 平台表面Z≈1.294 + 机器人站立高度≈0.462 = 1.756
+        pos = [0.0, 26.0, 1.756]  # 中心位置
         pos_randomization_range = [-1.0, -0.5, 1.0, 0.5]  # X±1.0m, Y±0.5m随机（一票否决：位置必须随机）
 
         default_joint_angles = {
@@ -617,11 +629,60 @@ class VBotSection013EnvCfg(VBotStairsEnvCfg):
         # 目标位置：固定在终止角范围远端（完全无随机化）
         # 固定目标点: X=0, Y=10.2, Z=2 (Z通过XML控制)
         # 起始位置Y=-2.4, 目标Y=10.2, 距离=12.6米
-        pose_command_range = [0.0, 10.2, 0.0, 0.0, 10.2, 0.0]
+        # 终点：中国结平台 (0, 32.3)
+        pose_command_range = [0.0, 32.3, 0.0, 0.0, 32.3, 0.0]
     @dataclass
     class ControlConfig:
+        stiffness = 60   # [N*m/rad] PD控制刚度（与section012一致，便于迁移预训练权重）
+        damping = 0.8    # [N*m*s/rad] PD控制阻尼（与section012一致）
         action_scale = 0.25
     init_state: InitState = field(default_factory=InitState)
     commands: Commands = field(default_factory=Commands)
     control_config: ControlConfig = field(default_factory=ControlConfig)
+
+
+@registry.envcfg("vbot_navigation_full")
+@dataclass
+class VBotFullEnvCfg(VBotSection013EnvCfg):
+    """VBot完整三阶段赛道（section011+012+013）
+
+    使用 scene_full.xml，碰撞模型直接挂在worldbody（无wrapper body），
+    每段地面独立传感器（s1/s2/s3），代码中合并读取。
+    起点在第1段起始（Y≈-2.4），可跑全程。
+    """
+    model_file: str = os.path.dirname(__file__) + "/xmls/scene_full.xml"
+    max_episode_seconds: float = 180.0  # 全图给 3 分钟
+    max_episode_steps: int = 18000
+
+    @dataclass
+    class Asset(Asset):
+        ground_subtree = "ground_root"  # 匹配所有 C1_ground_root / C2_ground_root / C3_ground_root
+
+    asset: Asset = field(default_factory=Asset)
+
+    @dataclass
+    class InitState:
+        # 起点：第1段起始位置（与section011一致）
+        pos = [0.0, -2.4, 0.5]
+        pos_randomization_range = [-0.5, -0.5, 0.5, 0.5]  # X±0.5m, Y±0.5m随机
+
+        default_joint_angles = {
+            "FR_hip_joint": -0.0,
+            "FR_thigh_joint": 0.9,
+            "FR_calf_joint": -1.8,
+            "FL_hip_joint": 0.0,
+            "FL_thigh_joint": 0.9,
+            "FL_calf_joint": -1.8,
+            "RR_hip_joint": -0.0,
+            "RR_thigh_joint": 0.9,
+            "RR_calf_joint": -1.8,
+            "RL_hip_joint": 0.0,
+            "RL_thigh_joint": 0.9,
+            "RL_calf_joint": -1.8,
+        }
+
+    init_state: InitState = field(default_factory=InitState)
+
+    # Commands 继承 section013（目标仍为中国结 Y=32.3）
+    # ControlConfig 继承 section013（kp=60, kv=0.8）
 

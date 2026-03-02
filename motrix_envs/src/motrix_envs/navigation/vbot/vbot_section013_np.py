@@ -90,6 +90,13 @@ class VBotSection013Env(NpEnv):
         # 调用父类NpEnv初始化
         super().__init__(cfg, num_envs=num_envs)
         
+        # ===== 崎岖地形适应模式（与section012一致） =====
+        self._rough_terrain = bool(getattr(cfg, "rough_terrain_mode", False))
+        self._state_history_len = int(getattr(cfg, "state_history_length", 3)) if self._rough_terrain else 0
+        if self._rough_terrain:
+            print(f"[ROUGH TERRAIN] 崎岖地形模式已启用: "
+                  f"足部接触力+base_height+状态历史({self._state_history_len}帧)")
+        
         # 初始化机器人body和接触
         self._body = self._model.get_body(cfg.asset.body_name)
         self._init_contact_geometry()
@@ -105,10 +112,28 @@ class VBotSection013Env(NpEnv):
             self._robot_arrow_body = None
             self._desired_arrow_body = None
         
-        # 动作和观测空间
+        # 动作空间
         self._action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(12,), dtype=np.float32)
-        # 观测空间：67维（55 + 12维接触力）
-        self._observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(54,), dtype=np.float32)
+        
+        # 计算观测维度（与section012一致）
+        # base: 54维
+        # rough terrain extras: foot_contacts:4 + foot_forces_body:12 + base_height:1 = 17
+        # state history: N * (joint_pos_rel:12 + joint_vel:12 + gravity:3) = N * 27
+        self._obs_base_dim = 54
+        if self._rough_terrain:
+            self._obs_terrain_dim = 17  # 4 + 12 + 1
+            self._obs_history_frame_dim = 27  # 12 + 12 + 3
+            self._obs_total_dim = (self._obs_base_dim + self._obs_terrain_dim
+                                   + self._state_history_len * self._obs_history_frame_dim)
+        else:
+            self._obs_terrain_dim = 0
+            self._obs_history_frame_dim = 0
+            self._obs_total_dim = self._obs_base_dim
+        
+        self._observation_space = gym.spaces.Box(
+            low=-np.inf, high=np.inf,
+            shape=(self._obs_total_dim,), dtype=np.float32
+        )
         
         self._num_dof_pos = self._model.num_dof_pos
         self._num_dof_vel = self._model.num_dof_vel
@@ -133,8 +158,8 @@ class VBotSection013Env(NpEnv):
         self.spawn_range = np.array(cfg.init_state.pos_randomization_range, dtype=np.float32)
     
         # 机器人站立目标高度（用于高度维持奖励和摔倒检测）
-        # 起始平台表面Z≈1.294, 机器人站立高度≈0.4m
-        self.base_height_target = 1.7
+        # 平台表面Z≈1.294 + 机器人站立高度≈0.462
+        self.base_height_target = cfg.init_state.pos[2]  # 从配置读取（1.756）
     
         # 导航统计计数器
         self.navigation_stats_step = 0
@@ -158,7 +183,38 @@ class VBotSection013Env(NpEnv):
         
         self._init_dof_pos[-self._num_action:] = self.default_angles
         self.action_filter_alpha = 0.3
-    
+
+        # PD增益从配置读取（与section012一致，便于迁移预训练权重）
+        self.kp = float(getattr(cfg.control_config, 'stiffness', 60.0))
+        self.kv = float(getattr(cfg.control_config, 'damping', 0.8))
+
+        # ===== 崎岖地形: 足部传感器 =====
+        self._foot_sensor_names = [f"{foot}_foot_contact" for foot in cfg.sensor.feet]
+        self._num_feet = len(cfg.sensor.feet)
+
+        # 崎岖地形参数缓存
+        if self._rough_terrain:
+            self._rough_attitude_scale = float(getattr(cfg, 'rough_attitude_penalty_scale', 0.1))
+            self._rough_clearance_scale = float(getattr(cfg, 'rough_foot_clearance_scale', 1.0))
+            self._rough_clearance_target = float(getattr(cfg, 'rough_foot_clearance_target', 0.08))
+            self._rough_stumble_scale = float(getattr(cfg, 'rough_stumble_penalty_scale', 0.5))
+            self._rough_air_time_target = float(getattr(cfg, 'rough_feet_air_time_target', 0.25))
+            self._rough_force_penalty_scale = float(getattr(cfg, 'rough_contact_force_penalty_scale', 0.01))
+
+    def _get_foot_contact_forces_body(self, data: mtx.SceneData,
+                                       root_quat: np.ndarray) -> np.ndarray:
+        """获取4只脚的接触力（转换到body frame），返回 (n_envs, 12)"""
+        n_envs = data.shape[0]
+        forces = []
+        for sensor_name in self._foot_sensor_names:
+            try:
+                force_world = self._model.get_sensor_value(sensor_name, data)  # (n_envs, 3)
+                force_body = Quaternion.rotate_inverse(root_quat, force_world)
+                forces.append(force_body)
+            except Exception:
+                forces.append(np.zeros((n_envs, 3), dtype=np.float32))
+        return np.concatenate(forces, axis=-1)  # (n_envs, 12)
+
     def _find_target_marker_dof_indices(self):
         """查找target_marker在dof_pos中的索引位置"""
         self._target_marker_dof_start = 0
@@ -277,11 +333,9 @@ class VBotSection013Env(NpEnv):
         current_vel = self.get_dof_vel(data)  # [num_envs, 12]
         
         # PD控制器：tau = kp * (target - current) - kv * vel
-        kp = 80.0   # 位置增益
-        kv = 6.0    # 速度增益
-        
+        # 增益从配置读取（与section012一致: kp=60, kv=0.8）
         pos_error = target_pos - current_pos
-        torques = kp * pos_error - kv * current_vel
+        torques = self.kp * pos_error - self.kv * current_vel
         
         # 限制力矩范围（与XML中的forcerange一致）
         # hip/thigh: ±17 N·m, calf: ±34 N·m
@@ -409,13 +463,13 @@ class VBotSection013Env(NpEnv):
         robot_position = root_pos[:, :2]
         robot_heading = self._get_heading_from_quat(root_quat)
         target_position = pose_commands[:, :2]
-        target_heading = pose_commands[:, 2]
         
         # 计算位置误差
         position_error = target_position - robot_position
         distance_to_target = np.linalg.norm(position_error, axis=1)
         
-        # 计算朝向误差
+        # 计算朝向误差（与section012一致：target_heading = 指向终点的方向）
+        target_heading = np.arctan2(position_error[:, 1], position_error[:, 0])
         heading_diff = target_heading - robot_heading
         heading_diff = np.where(heading_diff > np.pi, heading_diff - 2*np.pi, heading_diff)
         heading_diff = np.where(heading_diff < -np.pi, heading_diff + 2*np.pi, heading_diff)
@@ -423,19 +477,14 @@ class VBotSection013Env(NpEnv):
         # 达到判定（使用终点判定半径，与收集状态一致）
         reached_all = distance_to_target < FINISH_ZONE_RADIUS
         
-        # 计算期望速度命令（与平地navigation一致，简单P控制器）
+        # 计算期望速度命令（P控制器，指向终点）
         desired_vel_xy = np.clip(position_error * 1.0, -1.0, 1.0)
         desired_vel_xy = np.where(reached_all[:, np.newaxis], 0.0, desired_vel_xy)
         
-        # 角速度命令：跟踪运动方向（从当前位置指向目标）
-        # 与vbot_np保持一致的增益和上限，确保转向足够快
-        desired_heading = np.arctan2(position_error[:, 1], position_error[:, 0])
-        heading_to_movement = desired_heading - robot_heading
-        heading_to_movement = np.where(heading_to_movement > np.pi, heading_to_movement - 2*np.pi, heading_to_movement)
-        heading_to_movement = np.where(heading_to_movement < -np.pi, heading_to_movement + 2*np.pi, heading_to_movement)
-        desired_yaw_rate = np.clip(heading_to_movement * 1.0, -1.0, 1.0)  # 增益和上限与vbot_np一致
+        # 角速度命令（复用heading_diff，与section012一致）
+        desired_yaw_rate = np.clip(heading_diff * 1.0, -1.0, 1.0)
         deadband_yaw = np.deg2rad(8)
-        desired_yaw_rate = np.where(np.abs(heading_to_movement) < deadband_yaw, 0.0, desired_yaw_rate)
+        desired_yaw_rate = np.where(np.abs(heading_diff) < deadband_yaw, 0.0, desired_yaw_rate)
         desired_yaw_rate = np.where(reached_all, 0.0, desired_yaw_rate)
         
         if desired_yaw_rate.ndim > 1:
@@ -465,7 +514,8 @@ class VBotSection013Env(NpEnv):
         )
         stop_ready_flag = stop_ready.astype(np.float32)
         
-        obs = np.concatenate(
+        # ===== 基础观测 (54维) =====
+        base_obs = np.concatenate(
             [
                 noisy_linvel,       # 3
                 noisy_gyro,         # 3
@@ -475,14 +525,66 @@ class VBotSection013Env(NpEnv):
                 last_actions,       # 12
                 command_normalized, # 3
                 position_error_normalized,  # 2
-                heading_error_normalized[:, np.newaxis],  # 1 - 最终朝向误差（保留）
+                heading_error_normalized[:, np.newaxis],  # 1
                 distance_normalized[:, np.newaxis],  # 1
                 reached_flag[:, np.newaxis],  # 1
                 stop_ready_flag[:, np.newaxis],  # 1
             ],
             axis=-1,
         )
-        assert obs.shape == (data.shape[0], 54)  # 54 + 1 = 55维
+        
+        num_envs = data.shape[0]
+        if self._rough_terrain:
+            # ===== 崎岖地形额外观测（与section012一致） =====
+            # 1. 足部接触力 (body frame, 4腿 x 3轴 = 12维)
+            foot_forces_body = self._get_foot_contact_forces_body(data, root_quat)
+            state.info["foot_forces_body"] = foot_forces_body
+
+            # 2. 足部是否接触地面 (4维 binary)
+            foot_contacts = (np.linalg.norm(
+                foot_forces_body.reshape(num_envs, self._num_feet, 3), axis=-1
+            ) > 0.1).astype(np.float32)  # (n_envs, 4)
+            state.info["foot_contacts"] = foot_contacts
+
+            # 3. 归一化基座高度 (1维)
+            base_height_normalized = (root_pos[:, 2] / self.base_height_target)[:, np.newaxis]
+
+            # 4. 状态历史 (N * 27维) — 用于隐式地形推断
+            current_frame = np.concatenate([
+                noisy_joint_angle,    # 12
+                noisy_joint_vel,      # 12
+                projected_gravity,    # 3
+            ], axis=-1)  # (n_envs, 27)
+
+            history_buffer = state.info.get("state_history", None)
+            if history_buffer is None or history_buffer.shape[0] != num_envs:
+                history_buffer = np.tile(
+                    current_frame[:, np.newaxis, :],
+                    (1, self._state_history_len, 1)
+                )
+            else:
+                history_buffer = np.concatenate([
+                    current_frame[:, np.newaxis, :],
+                    history_buffer[:, :-1, :]
+                ], axis=1)
+            state.info["state_history"] = history_buffer
+
+            history_flat = history_buffer.reshape(num_envs, -1)
+
+            obs = np.concatenate([
+                base_obs,                  # 54
+                foot_contacts,             # 4
+                foot_forces_body / 50.0,   # 12 (归一化)
+                base_height_normalized,    # 1
+                history_flat,              # N * 27
+            ], axis=-1)
+        else:
+            obs = base_obs
+            state.info["foot_contacts"] = np.zeros((num_envs, self._num_feet), dtype=np.float32)
+
+        assert obs.shape == (num_envs, self._obs_total_dim), (
+            f"Expected obs shape (*, {self._obs_total_dim}), got {obs.shape}"
+        )
         
         # 更新目标标记和箭头
         self._update_target_marker(data, pose_commands)
@@ -905,7 +1007,6 @@ class VBotSection013Env(NpEnv):
         robot_position = root_pos[:, :2]
         robot_heading = self._get_heading_from_quat(root_quat)
         target_position = pose_commands[:, :2]
-        target_heading = pose_commands[:, 2]
         
         position_error = target_position - robot_position
         distance_to_target = np.linalg.norm(position_error, axis=1)
@@ -919,19 +1020,16 @@ class VBotSection013Env(NpEnv):
         base_lin_vel_xy = base_lin_vel[:, :2]
         self._update_heading_arrows(data, root_pos, desired_vel_xy, base_lin_vel_xy)
         
+        # 朝向误差（与section012一致：target_heading = 指向终点的方向）
+        target_heading = np.arctan2(position_error[:, 1], position_error[:, 0])
         heading_diff = target_heading - robot_heading
         heading_diff = np.where(heading_diff > np.pi, heading_diff - 2*np.pi, heading_diff)
         heading_diff = np.where(heading_diff < -np.pi, heading_diff + 2*np.pi, heading_diff)
         
-        # 角速度跟踪运动方向
-        desired_heading = np.arctan2(position_error[:, 1], position_error[:, 0])
-        heading_to_movement = desired_heading - robot_heading
-        heading_to_movement = np.where(heading_to_movement > np.pi, heading_to_movement - 2*np.pi, heading_to_movement)
-        heading_to_movement = np.where(heading_to_movement < -np.pi, heading_to_movement + 2*np.pi, heading_to_movement)
-        desired_yaw_rate = np.clip(heading_to_movement * 1.0, -1.0, 1.0)
-        
+        # 角速度命令（复用heading_diff，与section012一致）
+        desired_yaw_rate = np.clip(heading_diff * 1.0, -1.0, 1.0)
         deadband_yaw = np.deg2rad(8)
-        desired_yaw_rate = np.where(np.abs(heading_to_movement) < deadband_yaw, 0.0, desired_yaw_rate)
+        desired_yaw_rate = np.where(np.abs(heading_diff) < deadband_yaw, 0.0, desired_yaw_rate)
         desired_yaw_rate = np.where(reached_all, 0.0, desired_yaw_rate)
         desired_vel_xy = np.where(reached_all[:, np.newaxis], 0.0, desired_vel_xy)
         
@@ -962,7 +1060,8 @@ class VBotSection013Env(NpEnv):
         )
         stop_ready_flag = stop_ready.astype(np.float32)
         
-        obs = np.concatenate(
+        # ===== 基础观测 (54维) =====
+        base_obs = np.concatenate(
             [
                 noisy_linvel,       # 3
                 noisy_gyro,         # 3
@@ -979,7 +1078,38 @@ class VBotSection013Env(NpEnv):
             ],
             axis=-1,
         )
-        assert obs.shape == (num_envs, 54), f"Expected obs shape (*, 54), got {obs.shape}"
+        
+        if self._rough_terrain:
+            # ===== 崎岖地形额外观测（与update_state一致） =====
+            foot_forces_body = self._get_foot_contact_forces_body(data, root_quat)
+            foot_contacts = (np.linalg.norm(
+                foot_forces_body.reshape(num_envs, self._num_feet, 3), axis=-1
+            ) > 0.1).astype(np.float32)
+            base_height_normalized = (root_pos[:, 2] / self.base_height_target)[:, np.newaxis]
+            
+            # 初始状态历史：用当前帧填充所有历史槽位
+            current_frame = np.concatenate([
+                noisy_joint_angle, noisy_joint_vel, projected_gravity
+            ], axis=-1)  # (num_envs, 27)
+            history_buffer = np.tile(
+                current_frame[:, np.newaxis, :],
+                (1, self._state_history_len, 1)
+            )
+            history_flat = history_buffer.reshape(num_envs, -1)
+            
+            obs = np.concatenate([
+                base_obs,                  # 54
+                foot_contacts,             # 4
+                foot_forces_body / 50.0,   # 12
+                base_height_normalized,    # 1
+                history_flat,              # N * 27
+            ], axis=-1)
+        else:
+            obs = base_obs
+        
+        assert obs.shape == (num_envs, self._obs_total_dim), (
+            f"Expected obs shape (*, {self._obs_total_dim}), got {obs.shape}"
+        )
         
         # ===== 构建初始信息（包含所有追踪字段） =====
         distance_to_finish = np.linalg.norm(robot_init_xy - FINISH_ZONE_CENTER, axis=-1)
@@ -1020,7 +1150,14 @@ class VBotSection013Env(NpEnv):
             # 物理
             "last_dof_vel": np.zeros((num_envs, self._num_action), dtype=np.float32),
             "contacts": np.zeros((num_envs, self.num_foot_check), dtype=np.bool_),
+            # 足部接触（崎岖地形用）
+            "foot_contacts": np.zeros((num_envs, self._num_feet), dtype=np.float32),
         }
+        
+        # 崎岖地形：初始化状态历史缓冲区
+        if self._rough_terrain:
+            info["state_history"] = history_buffer
+            info["foot_forces_body"] = foot_forces_body
         
         return obs, info
     
