@@ -569,6 +569,12 @@ class navigation:
         """完整赛道版本（复用section013 PPO配置）"""
         pass
 
+    @rlcfg("vbot_navigation_section011_012")
+    @dataclass
+    class VBotNavigationSection011012PPOConfig(VBotNavigationSection013PPOConfig):
+        """section011+012合并训练（复用同样的网络结构和超参数）"""
+        pass
+
     @rlcfg("vbot_navigation_section001")
     @dataclass
     class VbotSection001PPOConfig(PPOCfg):

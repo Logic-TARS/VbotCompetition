@@ -22,4 +22,4 @@ from .vbot_section013_np import VBotSection013Env
 from .vbot_full_np import VBotFullEnv
 from .vbot_long_course_np import VBotLongCourseEnv
 from .vbot_nav_flat_np import VBotNavFlatEnv
-from .cfg import VBotEnvCfg, VBotStairsEnvCfg, VBotSection01EnvCfg, VBotSection02EnvCfg, VBotSection03EnvCfg, VBotLongCourseEnvCfg, VBotSection001EnvCfg, VBotSection011EnvCfg, VBotSection012EnvCfg, VBotSection013EnvCfg, VBotFullEnvCfg  # noqa: F401
+from .cfg import VBotEnvCfg, VBotStairsEnvCfg, VBotSection01EnvCfg, VBotSection02EnvCfg, VBotSection03EnvCfg, VBotLongCourseEnvCfg, VBotSection001EnvCfg, VBotSection011EnvCfg, VBotSection012EnvCfg, VBotSection013EnvCfg, VBotFullEnvCfg, VBotSection011012EnvCfg  # noqa: F401

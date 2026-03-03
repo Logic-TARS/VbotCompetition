@@ -686,3 +686,48 @@ class VBotFullEnvCfg(VBotSection013EnvCfg):
     # Commands 继承 section013（目标仍为中国结 Y=32.3）
     # ControlConfig 继承 section013（kp=60, kv=0.8）
 
+
+@registry.envcfg("vbot_navigation_section011_012")
+@dataclass
+class VBotSection011012EnvCfg(VBotFullEnvCfg):
+    """VBot section011+012 合并训练（去掉section013，减少模拟开销）
+
+    使用 scene_section011_012.xml，仅包含楼梯平台(011)和复杂地形(012)。
+    适合专门训练地形穿越能力，不含滚球/终点/庆祝逻辑。
+    传感器: s1(011地面) + s2(012地面)，无s3。
+    """
+    model_file: str = os.path.dirname(__file__) + "/xmls/scene_section011_012.xml"
+    max_episode_seconds: float = 120.0  # 两段给2分钟
+    max_episode_steps: int = 12000
+
+    # 传感器段标识（供环境代码读取，覆盖full的s1/s2/s3）
+    ground_sections: list = field(default_factory=lambda: ["s1", "s2"])
+
+    @dataclass
+    class InitState:
+        # 起点与full一致（第1段起始）
+        pos = [0.0, -2.4, 0.5]
+        pos_randomization_range = [-0.5, -0.5, 0.5, 0.5]
+
+        default_joint_angles = {
+            "FR_hip_joint": -0.0,
+            "FR_thigh_joint": 0.9,
+            "FR_calf_joint": -1.8,
+            "FL_hip_joint": 0.0,
+            "FL_thigh_joint": 0.9,
+            "FL_calf_joint": -1.8,
+            "RR_hip_joint": -0.0,
+            "RR_thigh_joint": 0.9,
+            "RR_calf_joint": -1.8,
+            "RL_hip_joint": 0.0,
+            "RL_thigh_joint": 0.9,
+            "RL_calf_joint": -1.8,
+        }
+
+    @dataclass
+    class Commands:
+        # 目标：section012终点 丙午大吉平台 Y≈24.3
+        pose_command_range = [0.0, 24.3, 0.0, 0.0, 24.3, 0.0]
+
+    init_state: InitState = field(default_factory=InitState)
+    commands: Commands = field(default_factory=Commands)
