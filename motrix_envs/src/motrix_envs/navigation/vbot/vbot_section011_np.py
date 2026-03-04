@@ -201,18 +201,18 @@ class VBotSection011Env(NpEnv):
             self.celebration_movement_threshold = competition_cfg.celebration_movement_threshold
         else:
             self.start_zone_center = np.array([0.0, -2.4], dtype=np.float32)
-            self.start_zone_radius = 1.0
-            self.smiley_positions = np.array([[0.0, 0.0], [0.0, 5.0], [0.0, 10.0]], dtype=np.float32)
-            self.smiley_radius = 0.5
-            self.hongbao_positions = np.array([[1.0, 2.5], [1.0, 7.5], [1.0, 12.5]], dtype=np.float32)
-            self.hongbao_radius = 0.5
+            self.start_zone_radius = 3.5
+            self.smiley_positions = np.array([[0.0, -1.0], [0.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+            self.smiley_radius = 1.0
+            self.hongbao_positions = np.array([[0.0, 3.0], [0.0, 4.5], [0.0, 6.0]], dtype=np.float32)
+            self.hongbao_radius = 1.0
             self.finish_zone_center = np.array([0.0, 7.83], dtype=np.float32)  # 2026平台中心
             self.finish_zone_radius = 1.0
             self.boundary_x_min = -20.0
             self.boundary_x_max = 20.0
             self.boundary_y_min = -10.0
             self.boundary_y_max = 20.0
-            self.celebration_duration = 1.0
+            self.celebration_duration = 1.5
             self.celebration_movement_threshold = 0.1
 
         # Fall detection thresholds
@@ -351,13 +351,37 @@ class VBotSection011Env(NpEnv):
         return np.concatenate(forces, axis=-1)  # (n_envs, 12)
 
     def apply_action(self, actions: np.ndarray, state: NpEnvState) -> NpEnvState:
-        """应用动作：带低通滤波的PD力矩控制（与section012一致）"""
+        """应用动作：带低通滤波的PD力矩控制（与section012一致）
+
+        到达终点后自动注入庆祝动作序列（交替抬腿+身体摇摆），
+        确保产生"优雅且明显"的庆祝表现。
+        """
         state.info["last_dof_vel"] = self.get_dof_vel(state.data)
 
         state.info["last_actions"] = state.info.get(
             "current_actions",
             np.zeros((state.data.shape[0], self._num_action), dtype=np.float32),
         )
+
+        # === 庆祝模式: 到达终点后注入预设庆祝动作 ===
+        finish_triggered = state.info.get("finish_triggered",
+                                          np.zeros(state.data.shape[0], dtype=bool))
+        celebration_completed = state.info.get("celebration_completed",
+                                               np.zeros(state.data.shape[0], dtype=bool))
+        celebration_start_time = state.info.get("celebration_start_time",
+                                                np.full(state.data.shape[0], -1.0, dtype=np.float32))
+        time_elapsed = state.info.get("time_elapsed",
+                                      np.zeros(state.data.shape[0], dtype=np.float32))
+        if isinstance(time_elapsed, (int, float)):
+            time_elapsed = np.full(state.data.shape[0], time_elapsed, dtype=np.float32)
+
+        actions = actions.copy()  # 避免修改原始数组
+        for env_id in range(state.data.shape[0]):
+            if (finish_triggered[env_id]
+                    and not celebration_completed[env_id]
+                    and celebration_start_time[env_id] >= 0):
+                t = float(time_elapsed[env_id] - celebration_start_time[env_id])
+                actions[env_id] = self._generate_celebration_actions(t)
 
         state.info["next_actions"] = actions
 
@@ -830,23 +854,33 @@ class VBotSection011Env(NpEnv):
         # =====================================================
         robot_pos = root_pos[:, :2]  # (n_envs, 2)
         
-        # Determine active waypoint for each environment
+        # Determine active waypoint: 选择最近的未触发目标点（含 bonus 和终点）
+        # 替代固定顺序，使路径规划更高效（避免红包在终点后方导致绕路）
         target_positions = np.zeros((n_envs, 2), dtype=np.float32)
         for env_id in range(n_envs):
-            if not smiley_triggered[env_id, 0]:
-                target_positions[env_id] = self.smiley_positions[0]
-            elif not smiley_triggered[env_id, 1]:
-                target_positions[env_id] = self.smiley_positions[1]
-            elif not smiley_triggered[env_id, 2]:
-                target_positions[env_id] = self.smiley_positions[2]
-            elif not hongbao_triggered[env_id, 0]:
-                target_positions[env_id] = self.hongbao_positions[0]
-            elif not hongbao_triggered[env_id, 1]:
-                target_positions[env_id] = self.hongbao_positions[1]
-            elif not hongbao_triggered[env_id, 2]:
-                target_positions[env_id] = self.hongbao_positions[2]
-            else:
-                target_positions[env_id] = self.finish_zone_center
+            candidates = []
+            candidate_dists = []
+            # 收集所有未触发的笑脸
+            for i in range(3):
+                if not smiley_triggered[env_id, i]:
+                    pos = self.smiley_positions[i]
+                    d = np.linalg.norm(robot_pos[env_id] - pos)
+                    candidates.append(pos)
+                    candidate_dists.append(d)
+            # 收集所有未触发的红包
+            for i in range(3):
+                if not hongbao_triggered[env_id, i]:
+                    pos = self.hongbao_positions[i]
+                    d = np.linalg.norm(robot_pos[env_id] - pos)
+                    candidates.append(pos)
+                    candidate_dists.append(d)
+            # 终点始终作为候选
+            finish_d = np.linalg.norm(robot_pos[env_id] - self.finish_zone_center)
+            candidates.append(self.finish_zone_center)
+            candidate_dists.append(finish_d)
+            # 选择最近目标
+            nearest_idx = int(np.argmin(candidate_dists))
+            target_positions[env_id] = candidates[nearest_idx]
         
         # Direction to target (unit vector)
         to_target = target_positions - robot_pos
@@ -901,20 +935,28 @@ class VBotSection011Env(NpEnv):
         info["finish_rewarded"] |= newly_triggered_finish
         
         # =====================================================
-        # 6. CELEBRATION BONUS (+2 for staying still at finish)
+        # 6. CELEBRATION BONUS (+2 for active celebration at finish)
         # =====================================================
+        # 庆祝判定: 到达终点后保持站立 + 在终点附近完成庆祝动作序列
+        # （庆祝动作由 apply_action 自动注入，此处仅检测时长和稳定性）
         time_elapsed_value = info.get("time_elapsed", 0.0)
         if isinstance(time_elapsed_value, (int, float)):
             time_elapsed = np.full(n_envs, time_elapsed_value, dtype=np.float32)
         else:
             time_elapsed = time_elapsed_value
-        
+
         for env_id in range(n_envs):
             if finish_triggered[env_id] and not celebration_completed[env_id]:
                 if celebration_start_time[env_id] >= 0:
                     celebration_time = time_elapsed[env_id] - celebration_start_time[env_id]
-                    speed = np.linalg.norm(base_lin_vel[env_id, :2])
-                    if speed < self.celebration_movement_threshold:
+                    # 检查: 仍站立 + 仍在终点附近（2倍半径容忍）
+                    in_finish = np.linalg.norm(
+                        robot_pos[env_id] - self.finish_zone_center
+                    ) < self.finish_zone_radius * 2.0
+                    standing = base_height[env_id] > (
+                        self.base_height_target * self.min_standing_height_ratio
+                    )
+                    if in_finish and standing:
                         if celebration_time >= self.celebration_duration:
                             if not info.get("celebration_rewarded", np.zeros(n_envs, dtype=bool))[env_id]:
                                 reward[env_id] += 2.0
@@ -924,6 +966,7 @@ class VBotSection011Env(NpEnv):
                                 info["celebration_rewarded"][env_id] = True
                                 self._log(f"[ENV {env_id}] Celebration completed! +2 points")
                     else:
+                        # 如果跌倒或离开终点区域，重置庆祝计时
                         celebration_start_time[env_id] = time_elapsed[env_id]
 
         info["celebration_start_time"] = celebration_start_time
@@ -1110,6 +1153,39 @@ class VBotSection011Env(NpEnv):
         qz = cr * cp * sy - sr * sp * cy
         return np.array([qx, qy, qz, qw], dtype=np.float32)
 
+    def _generate_celebration_actions(self, t: float) -> np.ndarray:
+        """生成庆祝动作序列 — 交替抬腿 + 身体摇摆 + 小跳
+
+        关节映射:
+          0:FR_hip  1:FR_thigh  2:FR_calf
+          3:FL_hip  4:FL_thigh  5:FL_calf
+          6:RR_hip  7:RR_thigh  8:RR_calf
+          9:RL_hip 10:RL_thigh 11:RL_calf
+
+        动作范围 [-1, 1]，经 action_scale(0.25) 缩放后加到默认角度上。
+        振幅 0.8 → 实际关节偏移 0.2 rad ≈ 11.5°，肉眼可见。
+        """
+        actions = np.zeros(12, dtype=np.float32)
+        freq = 3.0  # 基频 3 Hz — 快速但不过激
+
+        # ---- 前腿交替抬起（最显眼的庆祝动作）----
+        actions[1] = 0.8 * np.sin(2 * np.pi * freq * t)              # FR thigh
+        actions[4] = 0.8 * np.sin(2 * np.pi * freq * t + np.pi)     # FL thigh（反相）
+        actions[2] = -0.6 * np.sin(2 * np.pi * freq * t)            # FR calf 跟随
+        actions[5] = -0.6 * np.sin(2 * np.pi * freq * t + np.pi)    # FL calf 跟随
+
+        # ---- 髋关节左右摇摆（低频，营造"扭动"感）----
+        actions[0] = 0.5 * np.sin(2 * np.pi * 1.5 * t)              # FR hip
+        actions[3] = 0.5 * np.sin(2 * np.pi * 1.5 * t)              # FL hip
+        actions[6] = -0.3 * np.sin(2 * np.pi * 1.5 * t)             # RR hip
+        actions[9] = -0.3 * np.sin(2 * np.pi * 1.5 * t)             # RL hip
+
+        # ---- 后腿轻微弹跳（双倍频，增加活泼感）----
+        actions[7] = 0.3 * np.sin(2 * np.pi * freq * 2 * t)         # RR thigh
+        actions[10] = 0.3 * np.sin(2 * np.pi * freq * 2 * t)        # RL thigh
+
+        return actions
+
     def reset(
         self,
         data: mtx.SceneData,
@@ -1139,9 +1215,19 @@ class VBotSection011Env(NpEnv):
             reset_indices = np.arange(num_envs)
             num_reset = num_envs
 
-        # ===== 在 START zone 随机生成位置（X轴随机，Y固定）=====
-        spawn_x = np.random.uniform(-4.0, 4.0, num_reset)  # 留1m边距，避免平台边缘出生
-        spawn_y = np.full(num_reset, self.start_zone_center[1], dtype=np.float32)
+        # ===== 在 START zone 随机生成位置 =====
+        # X: 基于配置的 start_zone_radius 随机，保持与声明一致
+        # Y: 在 start_zone_center[1] ± 0.5m 范围内随机
+        spawn_x = np.random.uniform(
+            self.start_zone_center[0] - self.start_zone_radius,
+            self.start_zone_center[0] + self.start_zone_radius,
+            num_reset
+        )
+        spawn_y = np.random.uniform(
+            self.start_zone_center[1] - 0.5,
+            self.start_zone_center[1] + 0.5,
+            num_reset
+        )
         spawn_z = cfg.init_state.pos[2]
 
         # 初始朝向：面向+Y方向（朝终点），小范围随机 ±30°

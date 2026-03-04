@@ -22,6 +22,16 @@
     <!-- 加载需要的模型 -->
     <model name="section01V" file="0202_V_section01.xml"/>  <!-- 视觉模型 -->
     <model name="section01C" file="0126_C_section01.xml"/>  <!-- 碰撞模型 -->
+
+    <!-- ========== 红包（金球）贴图和材质 ========== -->
+    <!-- 复用 section02 的 GoldBall 贴图与材质，与 0303_V_section02.xml 一致 -->
+    <texture type="2d" colorspace="sRGB" name="GoldBall_BK_Bake1_CyclesBake S2A_COMBINED"
+             file="assets/GoldBall_BK_Bake1_CyclesBake S2A_COMBINED.png"/>
+    <material name="MI_GoldBall_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="0.5">
+      <layer texture="GoldBall_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+    </material>
+    <!-- 金球装饰网格（origin-centered, ~4.6×5.4×1.9m） -->
+    <mesh name="V_GoldBall_BK" file="../assets/V_GoldBall_BK.obj"/>
   </asset>
 
   <worldbody>
@@ -30,6 +40,43 @@
     <!-- 直接加载模型，不嵌套在body中 -->
     <attach model="section01V" prefix="V_"/>   <!-- 视觉模型前缀V_ -->
     <attach model="section01C" prefix="C_"/>   <!-- 碰撞模型前缀C_ -->
+
+    <!-- ========== 竞赛元素：笑脸区域标记（坑洼地形，黄色发光球）========== -->
+    <!--
+      坑洼地形 height field 范围: Y=[-1.5, +1.5], max Z=0.28
+      3个笑脸均匀分布在坑洼地形中，Z稍高于地面浮空显示
+      位置对应 CompetitionConfig.smiley_positions
+    -->
+    <body name="smiley_marker_1" pos="0.0 -1.0 0.5">
+      <geom type="sphere" size="0.3" rgba="1.0 0.85 0.0 0.8"
+            contype="0" conaffinity="0" group="2" density="0"/>
+      <geom type="sphere" size="0.35" rgba="1.0 0.9 0.2 0.3"
+            contype="0" conaffinity="0" group="2" density="0"/>
+    </body>
+    <body name="smiley_marker_2" pos="0.0 0.0 0.5">
+      <geom type="sphere" size="0.3" rgba="1.0 0.85 0.0 0.8"
+            contype="0" conaffinity="0" group="2" density="0"/>
+      <geom type="sphere" size="0.35" rgba="1.0 0.9 0.2 0.3"
+            contype="0" conaffinity="0" group="2" density="0"/>
+    </body>
+    <body name="smiley_marker_3" pos="0.0 1.0 0.5">
+      <geom type="sphere" size="0.3" rgba="1.0 0.85 0.0 0.8"
+            contype="0" conaffinity="0" group="2" density="0"/>
+      <geom type="sphere" size="0.35" rgba="1.0 0.9 0.2 0.3"
+            contype="0" conaffinity="0" group="2" density="0"/>
+    </body>
+
+    <!-- ========== 竞赛元素：红包/金球装饰（斜坡地形）========== -->
+    <!--
+      斜坡 Adiban_003: Y≈[2.07, 6.89], 坡面从 Z=0 → Z≈1.30 (倾斜15°)
+      使用 V_GoldBall_BK 网格（与 0303_V_section02.xml 同款金球贴图）
+      放置在斜坡中部，覆盖3个红包触发区域
+      位置对应 CompetitionConfig.hongbao_positions: (0,3.0), (0,4.5), (0,6.0)
+    -->
+    <body name="goldball_decoration" pos="0.0 4.5 0.65">
+      <geom type="mesh" mesh="V_GoldBall_BK" material="MI_GoldBall_BK"
+            contype="0" conaffinity="0" group="2" density="0"/>
+    </body>
     
   </worldbody>
 

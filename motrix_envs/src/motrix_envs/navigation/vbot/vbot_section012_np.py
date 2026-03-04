@@ -18,7 +18,7 @@ FINISH_ZONE_RADIUS = 1.5  # 终点判定半径（m）
 # Y轴方向检查点（递增排列，机器人Y坐标超过后获得一次性奖励）
 # 对应赛道进度：平台边缘 → 楼梯顶部 → 中段（桥/河床区域） → 接近北侧出口 → 下楼梯区域
 CHECKPOINTS_Y = np.array([12.0, 14.5, 18.0, 21.0, 23.0], dtype=np.float32)
-CHECKPOINT_BONUS = 5.0
+CHECKPOINT_BONUS = 2.0  # 降级为训练引导信号（竞赛得分由里程碑系统处理）
 
 # 贺礼红包（右侧河床石头上，5个，每个3分，共15分）
 HELI_HONGBAO_POS = np.array([
@@ -37,12 +37,32 @@ BAINIAN_HONGBAO_POS = np.array([
     [-2.0, 17.82],   # 吊桥下方
 ], dtype=np.float32)
 BAINIAN_HONGBAO_RADIUS = 1.5
-BAINIAN_HONGBAO_BONUS = 2.5
+# 拜年红包分别计分：#1(桥面)包含在吊桥路线+10中无独立奖励，#2(桥底)+5
+BAINIAN_HONGBAO_BONUSES = np.array([0.0, 5.0], dtype=np.float32)
 
 # 合并所有红包位置（Fix #7: 用于向量化距离计算）
 ALL_HONGBAO_POS = np.concatenate([HELI_HONGBAO_POS, BAINIAN_HONGBAO_POS], axis=0)
 NUM_HELI = len(HELI_HONGBAO_POS)
 NUM_BAINIAN = len(BAINIAN_HONGBAO_POS)
+
+# ===== 竞赛得分里程碑 =====
+WAVE_CLEAR_Y = 12.0              # 通过波浪地形+楼梯
+WAVE_CLEAR_BONUS = 10.0          # 竞赛: +10
+
+ROUTE_SELECT_Y = 14.5            # 到达路线选择区域
+ROUTE_SELECT_BONUS = 5.0         # 竞赛: +5
+
+BRIDGE_ZONE_X_MAX = -1.0         # 吊桥区域X上限（左侧）
+RIVERBED_ZONE_X_MIN = 0.0        # 河床区域X下限（右侧）
+ROUTE_ZONE_Y_MIN = 15.0          # 路线区域Y起始
+ROUTE_ZONE_Y_MAX = 21.0          # 路线区域Y结束
+ROUTE_COMPLETE_Y = 21.0          # 路线完成Y阈值
+
+BRIDGE_ROUTE_BONUS = 10.0        # 竞赛: 吊桥路线 +10
+RIVERBED_ROUTE_BONUS = 5.0       # 竞赛: 河床路线 +5
+
+FINISH_DESCENT_Y = 23.0          # 终点下楼Y阈值
+FINISH_DESCENT_BONUS = 5.0       # 竞赛: +5
 
 # 赛道边界（南侧扩展至平地区域）
 BOUNDARY_X_MIN = -5.5
@@ -699,6 +719,40 @@ class VBotSection012Env(NpEnv):
         left_zone = eligible & ~in_zone
         celebration_start[left_zone] = time_elapsed[left_zone]
 
+        # ===== 竞赛里程碑追踪 =====
+        robot_x = root_pos[:, 0]
+
+        # 1. 波浪地形通过（Y > 12.0）
+        wave_cleared = info["wave_cleared"]
+        wave_cleared |= (robot_y >= WAVE_CLEAR_Y) & ~wave_cleared
+
+        # 2. 路线选择（到达分支区域 Y > 14.5）
+        route_selected = info["route_selected"]
+        route_selected |= (robot_y >= ROUTE_SELECT_Y) & ~route_selected
+
+        # 3. 路线区域追踪（记录机器人是否进入过桥/河床区域）
+        in_route_zone_y = (robot_y >= ROUTE_ZONE_Y_MIN) & (robot_y <= ROUTE_ZONE_Y_MAX)
+        info["bridge_zone_visited"] |= in_route_zone_y & (robot_x < BRIDGE_ZONE_X_MAX)
+        info["riverbed_zone_visited"] |= in_route_zone_y & (robot_x > RIVERBED_ZONE_X_MIN)
+
+        # 4. 吊桥路线完成（经过桥区 + 收集拜年#1 + Y > 21）
+        bridge_completed = info["bridge_route_completed"]
+        bridge_completed |= (
+            info["bridge_zone_visited"] & info["bainian_collected"][:, 0]
+            & (robot_y >= ROUTE_COMPLETE_Y) & ~bridge_completed
+        )
+
+        # 5. 河床路线完成（经过河床区 + Y > 21）
+        riverbed_completed = info["riverbed_route_completed"]
+        riverbed_completed |= (
+            info["riverbed_zone_visited"]
+            & (robot_y >= ROUTE_COMPLETE_Y) & ~riverbed_completed
+        )
+
+        # 6. 终点下楼（Y > 23）
+        descent_reached = info["finish_descent_reached"]
+        descent_reached |= (robot_y >= FINISH_DESCENT_Y) & ~descent_reached
+
         # ===== 足部腾空时间追踪 (崎岖地形模式) =====
         if self._rough_terrain:
             # 刷新当前步的足部接触力，避免使用上一步 _compute_obs 的过期数据
@@ -804,13 +858,49 @@ class VBotSection012Env(NpEnv):
         HEADING_ALIGNMENT_SCALE = 1.0
         reward += HEADING_ALIGNMENT_SCALE * heading_alignment * standing_mask
 
-        # ============ 5. 检查点奖励（一次性） ============
+        # ============ 5. 检查点奖励（一次性，训练引导） ============
         cp_reached = info["checkpoints_reached"]
         cp_rewarded = info["checkpoints_rewarded"]
         for i in range(len(CHECKPOINTS_Y)):
             newly = cp_reached[:, i] & ~cp_rewarded[:, i]
             reward += newly.astype(np.float32) * CHECKPOINT_BONUS
             cp_rewarded[:, i] |= newly
+
+        # ============ 5b. 竞赛里程碑奖励（一次性） ============
+        # 波浪地形 +10
+        wave_cleared = info["wave_cleared"]
+        wave_rewarded = info["wave_rewarded"]
+        newly_wave = wave_cleared & ~wave_rewarded
+        reward += newly_wave.astype(np.float32) * WAVE_CLEAR_BONUS
+        wave_rewarded |= newly_wave
+
+        # 路线选择 +5
+        route_selected = info["route_selected"]
+        route_rewarded = info["route_selected_rewarded"]
+        newly_route = route_selected & ~route_rewarded
+        reward += newly_route.astype(np.float32) * ROUTE_SELECT_BONUS
+        route_rewarded |= newly_route
+
+        # 吊桥路线 +10
+        bridge_completed = info["bridge_route_completed"]
+        bridge_rewarded = info["bridge_route_rewarded"]
+        newly_bridge = bridge_completed & ~bridge_rewarded
+        reward += newly_bridge.astype(np.float32) * BRIDGE_ROUTE_BONUS
+        bridge_rewarded |= newly_bridge
+
+        # 河床路线 +5
+        riverbed_completed = info["riverbed_route_completed"]
+        riverbed_rewarded = info["riverbed_route_rewarded"]
+        newly_riverbed = riverbed_completed & ~riverbed_rewarded
+        reward += newly_riverbed.astype(np.float32) * RIVERBED_ROUTE_BONUS
+        riverbed_rewarded |= newly_riverbed
+
+        # 终点下楼 +5
+        descent_reached = info["finish_descent_reached"]
+        descent_rewarded = info["finish_descent_rewarded"]
+        newly_descent = descent_reached & ~descent_rewarded
+        reward += newly_descent.astype(np.float32) * FINISH_DESCENT_BONUS
+        descent_rewarded |= newly_descent
 
         # ============ 6. 贺礼红包收集奖励（一次性） ============
         heli_collected = info["heli_collected"]
@@ -821,11 +911,12 @@ class VBotSection012Env(NpEnv):
             heli_rewarded[:, i] |= newly
 
         # ============ 7. 拜年红包收集奖励（一次性） ============
+        # #1(桥面): 0分(已包含在吊桥路线+10中)  #2(桥底): +5分
         bainian_collected = info["bainian_collected"]
         bainian_rewarded = info["bainian_rewarded"]
         for i in range(len(BAINIAN_HONGBAO_POS)):
             newly = bainian_collected[:, i] & ~bainian_rewarded[:, i]
-            reward += newly.astype(np.float32) * BAINIAN_HONGBAO_BONUS
+            reward += newly.astype(np.float32) * BAINIAN_HONGBAO_BONUSES[i]
             bainian_rewarded[:, i] |= newly
 
         # ============ 8. 终点到达奖励（一次性） ============
@@ -1060,7 +1151,7 @@ class VBotSection012Env(NpEnv):
         （当基类 _reset_done_envs 调用时 data 已切片，done=None，全量重置即可）
 
         关键要求：机器人初始位置必须随机分布在"2026"平台上（一票否决项）
-        平台中心: (0, 10.33, 1.044)，半尺寸: X=5.0, Y=1.5
+        平台中心: (0, 7.83)，表面Z≈1.294，半尺寸: X=5.0, Y=1.0
         """
         cfg: VBotSection012EnvCfg = self._cfg
         num_envs = data.shape[0]
@@ -1163,9 +1254,22 @@ class VBotSection012Env(NpEnv):
             # Y进度追踪
             "last_y": out_xy[:, 1].copy(),
             "last_distance_to_finish": distance_to_finish.copy(),
-            # 检查点（5个Y坐标里程碑）
+            # 检查点（训练引导信号）
             "checkpoints_reached": np.zeros((out_num, len(CHECKPOINTS_Y)), dtype=bool),
             "checkpoints_rewarded": np.zeros((out_num, len(CHECKPOINTS_Y)), dtype=bool),
+            # 竞赛里程碑
+            "wave_cleared": np.zeros(out_num, dtype=bool),
+            "wave_rewarded": np.zeros(out_num, dtype=bool),
+            "route_selected": np.zeros(out_num, dtype=bool),
+            "route_selected_rewarded": np.zeros(out_num, dtype=bool),
+            "bridge_zone_visited": np.zeros(out_num, dtype=bool),
+            "riverbed_zone_visited": np.zeros(out_num, dtype=bool),
+            "bridge_route_completed": np.zeros(out_num, dtype=bool),
+            "bridge_route_rewarded": np.zeros(out_num, dtype=bool),
+            "riverbed_route_completed": np.zeros(out_num, dtype=bool),
+            "riverbed_route_rewarded": np.zeros(out_num, dtype=bool),
+            "finish_descent_reached": np.zeros(out_num, dtype=bool),
+            "finish_descent_rewarded": np.zeros(out_num, dtype=bool),
             # 贺礼红包（5个，河床石头上）
             "heli_collected": np.zeros((out_num, len(HELI_HONGBAO_POS)), dtype=bool),
             "heli_rewarded": np.zeros((out_num, len(HELI_HONGBAO_POS)), dtype=bool),

@@ -420,23 +420,23 @@ class CompetitionConfig:
     """竞赛模式配置 - 用于支持emoji、红包、终点等竞赛元素"""
     # 起点区域
     start_zone_center: list = field(default_factory=lambda: [0.0, -2.4])
-    start_zone_radius: float = 1.0
+    start_zone_radius: float = 3.5  # 与实际START平台宽度匹配
     
-    # Emoji位置 (3个)
+    # Emoji位置 (3个) — 坑洼地形 height field 范围: Y=[-1.5, +1.5]
     smiley_positions: list = field(default_factory=lambda: [
-        [0.0, 0.0],      # Emoji 1
-        [0.0, 5.0],      # Emoji 2
-        [0.0, 10.0],     # Emoji 3
+        [0.0, -1.0],     # Emoji 1 — 坑洼前段
+        [0.0, 0.0],      # Emoji 2 — 坑洼中段
+        [0.0, 1.0],      # Emoji 3 — 坑洼后段
     ])
-    smiley_radius: float = 0.5
+    smiley_radius: float = 1.0  # 增大触发半径，崎岖地形更容易触发
     
-    # 红包位置 (3个)
+    # 红包位置 (3个) — 斜坡 Adiban_003: Y≈[2.07, 6.89], Z从0到1.30
     hongbao_positions: list = field(default_factory=lambda: [
-        [1.0, 2.5],      # 红包 1
-        [1.0, 7.5],      # 红包 2
-        [1.0, 12.5],     # 红包 3
+        [0.0, 3.0],      # 红包 1 — 斜坡下部
+        [0.0, 4.5],      # 红包 2 — 斜坡中部
+        [0.0, 6.0],      # 红包 3 — 斜坡上部
     ])
-    hongbao_radius: float = 0.5
+    hongbao_radius: float = 1.0  # 增大触发半径，崎岖地形更容易触发
     
     # 终点区域 — 2026平台中心 (碰撞体 Adiban_004 的中心Y=7.83, 表面Z≈1.294)
     finish_zone_center: list = field(default_factory=lambda: [0.0, 7.83])
@@ -449,7 +449,7 @@ class CompetitionConfig:
     boundary_y_max: float = 20.0
     
     # 庆祝参数
-    celebration_duration: float = 1.0
+    celebration_duration: float = 1.5  # 庆祝动作持续时间（秒）
     celebration_movement_threshold: float = 0.1
 
 
@@ -553,14 +553,14 @@ class VBotSection012EnvCfg(VBotStairsEnvCfg):
 
     @dataclass
     class InitState:
-        # 起始位置：南侧平地中央（在"2026"平台前方的平坦区域）
-        # 平地box中心Z=1.044, 半高0.25 → 表面Z=1.294
-        # 机器人站立高度0.462 → 出生Z = 1.294 + 0.462 = 1.756
-        # 平地Y范围: [2.83, 8.83]，机器人将从平地走向"2026"平台再进入复杂地形
-        pos = [0.0, 5.83, 1.756]
+        # 起始位置："2026"平台中心
+        # XML中平台碰撞体: pos="0.0 7.83 1.044" size="5.0 1.0 0.25"
+        # 表面Z = 1.044 + 0.25 = 1.294, 机器人站立高度0.462 → 出生Z = 1.756
+        # 平台Y范围: [6.83, 8.83]（一票否决项：必须从"2026"平台出发）
+        pos = [0.0, 7.83, 1.756]
         # 位置随机化范围 [x_min, y_min, x_max, y_max]，相对于pos中心的偏移
-        # 平地X范围: -5.0~5.0, Y范围: 2.83~8.83
-        pos_randomization_range = [-3.0, -2.0, 3.0, 2.0]
+        # 平台X: [-5,5] → 偏移±4.0, 平台Y: [6.83,8.83] → 偏移±1.0
+        pos_randomization_range = [-4.0, -1.0, 4.0, 1.0]
 
         default_joint_angles = {
             "FR_hip_joint": -0.0,
