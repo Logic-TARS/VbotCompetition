@@ -1,0 +1,129 @@
+<!--
+  ===================================================================
+  Section011 视觉模型 — 楼梯/平台地形的渲染用模型
+  ===================================================================
+  
+  文件角色：V = Visual（仅渲染，不参与物理碰撞）
+  
+  在 scene_section011_012.xml 中通过以下方式引入：
+    <model name="section011V" file="0303_V_section01.xml"/>
+    <attach model="section011V" prefix="V1_"/>
+  所有名称会自动加上 V1_ 前缀，避免与 Section012 冲突。
+  
+  赛道覆盖范围：Y ≈ -5 到 Y ≈ 8（Section011 区域）
+  
+  包含的视觉元素：
+    - 起跑平台（start-point）
+    - 赛道侧面 Logo 灯光
+    - 地面纹理（楼梯/台阶区域）
+    - 金属装饰（GOLD_BK）
+    - "2026" 发光字
+    - 箭头引导灯
+    - Section011 终点平台（END_BK，Y≈7.83）
+  
+  注意：所有 geom 均为 visual class，
+        contype=0 conaffinity=0 → 不产生碰撞
+  ===================================================================
+-->
+<mujoco>
+  <!-- assetdir="assets"：贴图和网格文件在 assets/ 子目录中 -->
+  <compiler angle="radian" assetdir="assets" autolimits="true"/>
+
+  <asset>
+
+    <!-- ========== 贴图 Textures ========== -->
+    <!-- sRGB = 颜色贴图，linear = 法线/粗糙度等物理贴图 -->
+    <texture type="2d" colorspace="sRGB" name="LOGOX4_BK_Bake1_CyclesBake S2A_COMBINED" file="LOGOX4_BK_Bake1_CyclesBake S2A_COMBINED.png"/>       <!-- Logo 颜色贴图 -->
+    <texture type="2d" colorspace="linear" name="LOGOX4_BK_Bake1_CyclesBake S2A_COMBINED_RO" file="LOGOX4_BK_Bake1_CyclesBake S2A_COMBINED_RO.png"/> <!-- Logo 粗糙度+遮挡贴图 -->
+    <texture type="2d" colorspace="sRGB" name="LOGOX4_BK_emmision" file="LOGOX4_BK_Bake1_CyclesBake S2A_COMBINED_em.png"/>                             <!-- Logo 自发光贴图 -->
+    <texture type="2d" colorspace="sRGB" name="START_BK_Bake1_CyclesBake S2A_COMBINED" file="START_BK_Bake1_CyclesBake S2A_COMBINED.png"/>
+    <texture type="2d" colorspace="sRGB" name="Section_1_END_BK_Bake1_CyclesBake S2A_COMBINED" file="Section_1_END_BK_Bake1_CyclesBake S2A_COMBINED.png"/>
+    <texture type="2d" colorspace="linear" name="Section_1_END_BK_Bake1_CyclesBake S2A_COMBINED_RO" file="Section_1_END_BK_Bake1_CyclesBake S2A_COMBINED_RO.png"/>
+    <texture type="2d" colorspace="sRGB" name="Section_1_GOLD_BK_Bake1_CyclesBake S2A_COMBINED" file="Section_1_GOLD_BK_Bake1_CyclesBake S2A_COMBINED.png"/>
+    <texture type="2d" colorspace="sRGB" name="Section_1_terrain_BK_Bake1_CyclesBake S2A_COMBINED" file="Section_1_terrain_BK_Bake1_CyclesBake S2A_COMBINED.png"/>
+    <texture type="2d" colorspace="sRGB" name="start-point_BK_Bake1_CyclesBake S2A_COMBINED" file="start-point_BK_Bake1_CyclesBake S2A_COMBINED.png"/>
+
+    <!-- ========== 材质 Materials ========== -->
+    <!-- PBR 材质：rgba=基色, metallic=金属度, roughness=粗糙度, emission=自发光 -->
+    <material name="YELLOW_light.006" rgba="1.0 0.67 0.063 1.0" emission="1.0 0.67 0.063 1.0" emissionintensity="5.0"/>
+    <material name="MI_LOGOX4_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="1.0" emission="1 1 1 1" emissionintensity="1">
+      <layer texture="LOGOX4_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+      <layer texture="LOGOX4_BK_Bake1_CyclesBake S2A_COMBINED_RO" role="orm"/>
+      <layer texture="LOGOX4_BK_emmision" role="emissive"/>
+    </material>
+    <material name="MI_START_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="0.800000011920929">
+      <layer texture="START_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+    </material>
+    <material name="MI_Section_1_END_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="1.0">
+      <layer texture="Section_1_END_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+      <layer texture="Section_1_END_BK_Bake1_CyclesBake S2A_COMBINED_RO" role="orm"/>
+    </material>
+    <material name="MI_Section_1_GOLD_BK" rgba="1 1 1 1" reflectance="0.5" metallic="1.0" roughness="0.0">
+      <layer texture="Section_1_GOLD_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+    </material>
+    <material name="MI_Section_1_terrain_BK" rgba="1 1 1 1" reflectance="0.5" metallic="1.0" roughness="1.0">
+      <layer texture="Section_1_terrain_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+    </material>
+    <material name="MI_white_light" rgba="1.0 1.0 1.0 1.0" emission="1.0 1.0 1.0 1.0" emissionintensity="5.0"/>
+    <material name="bluelight" rgba="0.0 0.25 1.0 1.0" emission="0.0 0.25 1.0 1.0" emissionintensity="5.0"/>
+    <material name="MI_start-point_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="1.0">
+      <layer texture="start-point_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+    </material>
+
+    <!-- ========== 视觉网格 Visual Meshes ========== -->
+    <!-- 所有网格为 OBJ 格式，class="visual" 表示仅用于渲染 -->
+    <mesh class="visual" name="V_2026_LIGHT" file="V_2026_LIGHT.obj"/>            <!-- "2026" 发光字 -->
+    <mesh class="visual" name="V_LOGOX4_BK" file="V_LOGOX4_BK.obj"/>              <!-- 赛道侧面 Logo -->
+    <mesh class="visual" name="V_START_BK" file="V_START_BK.obj"/>                <!-- 起跑区域底面 -->
+    <mesh class="visual" name="V_Section_1_END_BK" file="V_Section_1_END_BK.obj"/><!-- Section011 终点平台 -->
+    <mesh class="visual" name="V_Section_1_GOLD_BK" file="V_Section_1_GOLD_BK.obj"/><!-- 中间金属装饰 -->
+    <mesh class="visual" name="V_Section_1_terrain_BK" file="V_Section_1_terrain_BK.obj"/><!-- 地面纹理 -->
+    <mesh class="visual" name="V_arrow_1_LIGHT" file="V_arrow_1_LIGHT.obj"/>      <!-- 箭头引导灯 -->
+    <mesh class="visual" name="V_ground_left2_LIGHT" file="V_ground_left2_LIGHT.obj"/><!-- 地面侧灯 -->
+    <mesh class="visual" name="V_start-point_003_LIGHT" file="V_start-point_003_LIGHT.obj"/><!-- 起跑点蓝色灯 -->
+    <mesh class="visual" name="V_start-point_BK" file="V_start-point_BK.obj"/>   <!-- 起跑点地面 -->
+
+    <!-- Collision meshes -->
+  </asset>
+
+  <!-- ========== 默认属性 ========== -->
+  <default>
+      <!-- visual: group=2(渲染层), contype=0+conaffinity=0(不碰撞), density=0(无质量) -->
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" group="2" density="0"/>
+      </default>
+      <!-- collision: group=3(碰撞层), contype=1+conaffinity=1(参与碰撞) -->
+      <!-- 本文件中未使用碰撞类，但保留定义以兼容 MuJoCo 格式 -->
+      <default class="collision">
+        <geom type="mesh" rgba="1 1 1 1" group="3" contype="1" conaffinity="1"/>
+      </default>
+  </default>
+
+  <!-- ========== 场景几何体 ========== -->
+  <!--
+    所有视觉元素放在一个 B_body 下。
+    所有 geom 的 class="visual" → 不参与物理碰撞。
+    
+    赛道布局（Y轴向前，Z轴向上）：
+      Y ≈ -2.5  起跑区
+      Y ≈ 0~2   箭头引导灯 + 蓝色起跑灯
+      Y ≈ 3~5   金属装饰带
+      Y ≈ 7.8   "2026" 发光字 + Section011 终点平台
+  -->
+  <worldbody>
+
+    <body name="B_body" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+      <geom class="visual" mesh="V_2026_LIGHT" pos="0.0 7.789973258972168 1.0088530778884888" quat="1.0 0.0 0.0 0.0" material="YELLOW_light.006"/>                <!-- "2026" 黄色发光字 @ Y≈7.79 -->
+      <geom class="visual" mesh="V_arrow_1_LIGHT" pos="2.384185791015625e-07 3.0717613697052 0.2923547327518463" quat="1.0 0.0 0.0 0.0" material="MI_white_light"/>  <!-- 白色箭头引导灯 @ Y≈3.07 -->
+      <geom class="visual" mesh="V_ground_left2_LIGHT" pos="4.76837158203125e-07 1.9148139953613281 1.2470474243164062" quat="1.0 0.0 0.0 0.0" material="MI_white_light"/> <!-- 地面侧灯 @ Y≈1.91 -->
+      <geom class="visual" mesh="V_LOGOX4_BK" pos="5.0 -0.5 0.0" quat="1.0 0.0 0.0 0.0" material="MI_LOGOX4_BK"/>                                                  <!-- 赛道右侧 Logo @ X=5 -->
+      <geom class="visual" mesh="V_Section_1_END_BK" pos="2.967199559972565e-16 7.829628944396973 1.2940952777862549" quat="1.0 0.0 0.0 0.0" material="MI_Section_1_END_BK"/>  <!-- Section011 终点平台 @ Y≈7.83 -->
+      <geom class="visual" mesh="V_Section_1_GOLD_BK" pos="0.0 4.300259113311768 0.6168984770774841" quat="1.0 0.0 0.0 0.0" material="MI_Section_1_GOLD_BK"/>      <!-- 中间金属装饰带 @ Y≈4.30 -->
+      <geom class="visual" mesh="V_Section_1_terrain_BK" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" material="MI_Section_1_terrain_BK"/>                             <!-- 整个 Section011 地面纹理 -->
+      <geom class="visual" mesh="V_start-point_003_LIGHT" pos="-0.03327923268079758 2.67349910736084 0.3807156980037689" quat="1.0 0.0 0.0 0.0" material="bluelight"/> <!-- 起跑点蓝色灯 @ Y≈2.67 -->
+      <geom class="visual" mesh="V_start-point_BK" pos="0.0 -2.5 0.009999999776482582" quat="1.0 0.0 0.0 0.0" material="MI_start-point_BK"/>                       <!-- 起跑点地面纹理 @ Y=-2.5 -->
+      <geom class="visual" mesh="V_START_BK" pos="0.0 -2.5 0.0" quat="1.0 0.0 0.0 0.0" material="MI_START_BK"/>                                                   <!-- 起跑区域底面 @ Y=-2.5 -->
+    </body>
+  </worldbody>
+
+</mujoco>

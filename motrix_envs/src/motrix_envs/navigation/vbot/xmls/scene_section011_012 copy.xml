@@ -57,14 +57,14 @@
     <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
     
     <!-- ========== Section011：楼梯/平台地形 ========== -->
-    <model name="section011V" file="0303_V_section01.xml"/>  <!-- 视觉模型（仅渲染） -->
-    <model name="section011C" file="0303_C_section01.xml"/>  <!-- 碰撞模型（物理交互） -->
+    <model name="section011V" file="0202_V_section01.xml"/>  <!-- 视觉模型（仅渲染） -->
+    <model name="section011C" file="0126_C_section01.xml"/>  <!-- 碰撞模型（物理交互） -->
     
     <!-- ========== Section012：复杂崎岖地形 ========== -->
     <!-- 使用 fullmap 版本：将 heightfield 预烘焙为多边形网格，
          避免多个 heightfield 在同一场景中冲突 -->
-    <model name="section012V" file="0303_V_section02.xml"/>                    <!-- 视觉模型 -->
-    <model name="section012C" file="0303_C_section02_hotfix1_fullmap.xml"/>    <!-- 碰撞模型 -->
+    <model name="section012V" file="0202_V_section02.xml"/>                    <!-- 视觉模型 -->
+    <model name="section012C" file="0131_C_section02_hotfix1_fullmap.xml"/>    <!-- 碰撞模型 -->
   </asset>
 
   <worldbody>

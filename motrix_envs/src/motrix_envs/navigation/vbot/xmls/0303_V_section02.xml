@@ -1,0 +1,207 @@
+<!--
+  ===================================================================
+  Section012 视觉模型 — 复杂地形区域的渲染用模型
+  ===================================================================
+  
+  文件角色：V = Visual（仅渲染，不参与物理碰撞）
+  
+  在 scene_section011_012.xml 中通过以下方式引入：
+    <model name="section012V" file="0303_V_section02.xml"/>
+    <attach model="section012V" prefix="V2_"/>
+  所有名称会自动加上 V2_ 前缀。
+  
+  ★ 特别注意：本文件同时包含 Section011 和 Section012 的视觉元素！
+    - Section012 贴图/材质/网格：锥形路障、金球、桥梁、坡道、楼梯台阶等
+    - Section011 贴图/材质/网格：2026发光字、箭头引导灯、地面纹理、金属装饰
+    （Section011 的视觉元素在此文件中重复定义，用于完整渲染）
+  
+  赛道覆盖范围：
+    Section011 区段：Y ≈ 0 到 Y ≈ 8（起跑区+斜坡+终点平台）
+    Section012 区段：Y ≈ 10 到 Y ≈ 25（复杂地形，包含桥梁、锥形路障、坡道、楼梯）
+  
+  Section012 赛道布局（Y轴向前，Z轴向上）：
+    Y ≈ 10.3   Section012 入口（接 Section011 终点）
+    Y ≈ 12~14   楼梯上行区（左右各10级台阶）
+    Y ≈ 14~16   蓝色地板 + 锥形路障区
+    Y ≈ 15~20   桥梁（23级台阶）+ V型坡道 + 球形障碍
+    Y ≈ 20~23   楼梯下行区（左右各10级台阶）
+    Y ≈ 24.3    Section012 终点平台（金色装饰 + 2026标识）
+  ===================================================================
+-->
+<mujoco>
+  <compiler angle="radian" assetdir="assets" autolimits="true"/>
+
+  <asset>
+
+    <!-- ========== Section012 贴图 Textures ========== -->
+    <!-- 锥形路障、金球、坡道、蓝色地板、地形、桥梁组件、楼梯等 -->
+    <texture type="2d" colorspace="sRGB" name="Cone_BK_Bake1_CyclesBake S2A_COMBINED" file="Cone_BK_Bake1_CyclesBake S2A_COMBINED.png"/>             <!-- 锥形路障 颜色贴图 -->
+    <texture type="2d" colorspace="sRGB" name="GoldBall_BK_Bake1_CyclesBake S2A_COMBINED" file="GoldBall_BK_Bake1_CyclesBake S2A_COMBINED.png"/>     <!-- 金球装饰 颜色贴图 -->
+    <texture type="2d" colorspace="sRGB" name="S2_SLOP_BK_Bake1_CyclesBake_COMBINED" file="S2_SLOP_BK_Bake1_CyclesBake_COMBINED.png"/>               <!-- V型坡道 颜色贴图 -->
+    <texture type="2d" colorspace="linear" name="S2_SLOP_BK_Bake1_CyclesBake_COMBINED_ro" file="S2_SLOP_BK_Bake1_CyclesBake_COMBINED_ro.png"/>       <!-- V型坡道 粗糙度+遮挡贴图 -->
+    <texture type="2d" colorspace="sRGB" name="S2_bluefloor_BK_Bake1_CyclesBake_COMBINED" file="S2_bluefloor_BK_Bake1_CyclesBake_COMBINED.png"/>     <!-- 蓝色地板 颜色贴图 -->
+    <texture type="2d" colorspace="sRGB" name="Section_2_terrain_BK_Bake1_CyclesBake S2A_COMBINED" file="Section_2_terrain_BK_Bake1_CyclesBake S2A_COMBINED.png"/> <!-- Section012 地面纹理 -->
+    <texture type="2d" colorspace="sRGB" name="bridge_Cylinder_BK_Bake1_CyclesBake_COMBINED" file="bridge_Cylinder_BK_Bake1_CyclesBake_COMBINED.png"/> <!-- 桥梁圆柱支撑 -->
+    <texture type="2d" colorspace="sRGB" name="bridge_barrier_Bake1_CyclesBake S2A_COMBINED" file="bridge_barrier_Bake1_CyclesBake S2A_COMBINED.png"/> <!-- 桥梁护栏 -->
+    <texture type="2d" colorspace="sRGB" name="bridge_step_BK_Bake1_CyclesBake S2A_COMBINED" file="bridge_step_BK_Bake1_CyclesBake S2A_COMBINED.png"/> <!-- 桥梁踏板 -->
+    <texture type="2d" colorspace="sRGB" name="columnA_pt1_BK_Bake1_CyclesBake_COMBINED" file="columnA_pt1_BK_Bake1_CyclesBake_COMBINED.png"/>       <!-- 装饰立柱主体 -->
+    <texture type="2d" colorspace="sRGB" name="s2_END_gold_BK_Bake1_CyclesBake_COMBINED" file="s2_END_gold_BK_Bake1_CyclesBake_COMBINED.png"/>       <!-- 终点金色装饰 -->
+    <texture type="2d" colorspace="sRGB" name="s2_end_BK_Bake1_CyclesBake_COMBINED" file="s2_end_BK_Bake1_CyclesBake_COMBINED.png"/>                 <!-- 终点平台贴图 -->
+    <texture type="2d" colorspace="sRGB" name="stepblock_BK_Bake1_CyclesBake_COMBINED" file="stepblock_BK_Bake1_CyclesBake_COMBINED.png"/>             <!-- 楼梯台阶块 -->
+
+    <!-- ========== Section011 贴图（在此处重复定义以便完整渲染 2026 平台区域）========== -->
+    <texture type="2d" colorspace="sRGB" name="Section_1_END_BK_Bake1_CyclesBake S2A_COMBINED" file="Section_1_END_BK_Bake1_CyclesBake S2A_COMBINED.png"/>        <!-- S1 终点平台 -->
+    <texture type="2d" colorspace="linear" name="Section_1_END_BK_Bake1_CyclesBake S2A_COMBINED_RO" file="Section_1_END_BK_Bake1_CyclesBake S2A_COMBINED_RO.png"/><!-- S1 终点 粗糙度 -->
+    <texture type="2d" colorspace="sRGB" name="Section_1_GOLD_BK_Bake1_CyclesBake S2A_COMBINED" file="Section_1_GOLD_BK_Bake1_CyclesBake S2A_COMBINED.png"/>      <!-- S1 金属装饰 -->
+    <texture type="2d" colorspace="sRGB" name="Section_1_terrain_BK_Bake1_CyclesBake S2A_COMBINED" file="Section_1_terrain_BK_Bake1_CyclesBake S2A_COMBINED.png"/>  <!-- S1 地面纹理 -->
+
+    <!-- ========== Section012 材质 Materials ========== -->
+    <!-- PBR 材质：rgba=基色, metallic=金属度, roughness=粗糙度, emission=自发光 -->
+    <material name="MI_Cone_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="0.0">       <!-- 锥形路障：光滑无金属 -->
+      <layer texture="Cone_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+    </material>
+    <material name="MI_GoldBall_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="0.5">   <!-- 金球：中等粗糙 -->
+      <layer texture="GoldBall_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+    </material>
+    <material name="MI_white_light" rgba="1.0 1.0 1.0 1.0" emission="1.0 1.0 1.0 1.0" emissionintensity="5.0"/>  <!-- 白色自发光（箭头、灯光） -->
+    <material name="MI_S2_SLOP_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="1.0">    <!-- V型坡道：全粗糙 -->
+      <layer texture="S2_SLOP_BK_Bake1_CyclesBake_COMBINED" role="rgb"/>
+      <layer texture="S2_SLOP_BK_Bake1_CyclesBake_COMBINED_ro" role="orm"/>     <!-- orm = 遮挡(O)/粗糙度(R)/金属度(M) 打包贴图 -->
+    </material>
+    <material name="MI_S2_bluefloor_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="0.5">  <!-- 蓝色地板 -->
+      <layer texture="S2_bluefloor_BK_Bake1_CyclesBake_COMBINED" role="rgb"/>
+    </material>
+    <material name="YELLOW_light.006" rgba="1.0 0.6704580187797546 0.06337152421474457 1.0" emission="1.0 0.67 0.0 1.0" emissionintensity="3.0"/>  <!-- 黄色自发光（"2026"字） -->
+    <material name="MI_Section_2_terrain_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="0.5">  <!-- Section012 地面纹理 -->
+      <layer texture="Section_2_terrain_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+    </material>
+    <material name="MI_bridge_Cylinder_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="0.800000011920929">  <!-- 桥梁圆柱支撑 -->
+      <layer texture="bridge_Cylinder_BK_Bake1_CyclesBake_COMBINED" role="rgb"/>
+    </material>
+    <material name="MI_bridge_barrier_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="0.5">  <!-- 桥梁护栏 -->
+      <layer texture="bridge_barrier_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+    </material>
+    <material name="MI_bridge_step_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="0.5">  <!-- 桥梁踏板 -->
+      <layer texture="bridge_step_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+    </material>
+    <material name="MI_columnA_pt1_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="1.0">  <!-- 装饰立柱主体 -->
+      <layer texture="columnA_pt1_BK_Bake1_CyclesBake_COMBINED" role="rgb"/>
+    </material>
+    <material name="RED_light.001" rgba="1.0 0.011462525464594364 0.0019158226205036044 1.0" emission="1.0 0.0 0.0 1.0" emissionintensity="5.0"/>  <!-- 红色自发光（立柱灯） -->
+    <material name="MI_s2_END_gold_BK" rgba="1 1 1 1" reflectance="0.5" metallic="1.0" roughness="0.0">  <!-- 终点金色装饰：全金属+全光滑 -->
+      <layer texture="s2_END_gold_BK_Bake1_CyclesBake_COMBINED" role="rgb"/>
+    </material>
+    <material name="MI_s2_end_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="0.800000011920929">  <!-- 终点平台 -->
+      <layer texture="s2_end_BK_Bake1_CyclesBake_COMBINED" role="rgb"/>
+    </material>
+    <material name="MI_stepblock_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="0.800000011920929">  <!-- 楼梯台阶块 -->
+      <layer texture="stepblock_BK_Bake1_CyclesBake_COMBINED" role="rgb"/>
+    </material>
+    <material name="MI_RED" rgba="0.5906158089637756 0.008023164235055447 0.001517647528089583 1.0" reflectance="0.5" metallic="0.0" roughness="1.0"/>  <!-- 深红色（楼梯台阶轮廓线） -->
+
+    <!-- ========== Section011 材质（重复定义以完整渲染 2026 平台区域）========== -->
+    <material name="MI_Section_1_END_BK" rgba="1 1 1 1" reflectance="0.5" metallic="0.0" roughness="1.0">  <!-- S1 终点平台 -->
+      <layer texture="Section_1_END_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+      <layer texture="Section_1_END_BK_Bake1_CyclesBake S2A_COMBINED_RO" role="orm"/>
+    </material>
+    <material name="MI_Section_1_GOLD_BK" rgba="1 1 1 1" reflectance="0.5" metallic="1.0" roughness="0.0">  <!-- S1 金属装饰：全金属 -->
+      <layer texture="Section_1_GOLD_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+    </material>
+    <material name="MI_Section_1_terrain_BK" rgba="1 1 1 1" reflectance="0.5" metallic="1.0" roughness="1.0">  <!-- S1 地面纹理 -->
+      <layer texture="Section_1_terrain_BK_Bake1_CyclesBake S2A_COMBINED" role="rgb"/>
+    </material>
+
+    <!-- ========== Section012 视觉网格 Meshes ========== -->
+    <!-- class="visual" 表示仅用于渲染，不参与碰撞 -->
+    <mesh class="visual" name="V_Cone_BK" file="V_Cone_BK.obj"/>                    <!-- 锥形路障（8个） -->
+    <mesh class="visual" name="V_GoldBall_BK" file="V_GoldBall_BK.obj"/>              <!-- 金球装饰 -->
+    <mesh class="visual" name="V_S2_Little_Light" file="V_S2_Little_Light.obj"/>      <!-- 小型灯光 -->
+    <mesh class="visual" name="V_S2_SLOP_BK" file="V_S2_SLOP_BK.obj"/>              <!-- V型坡道表面 -->
+    <mesh class="visual" name="V_S2_bluefloor_BK" file="V_S2_bluefloor_BK.obj"/>    <!-- 蓝色地板 -->
+    <mesh class="visual" name="V_S2_daji_LIGHT" file="V_S2_daji_LIGHT.obj"/>         <!-- 大型灯光/2026标识发光体 -->
+    <mesh class="visual" name="V_S2_ground_light" file="V_S2_ground_light.obj"/>     <!-- 地面灯光 -->
+    <mesh class="visual" name="V_Section_2_terrain_BK" file="V_Section_2_terrain_BK.obj"/>  <!-- Section012 整体地面纹理 -->
+    <mesh class="visual" name="V_arrow_3_LIGHT" file="V_arrow_3_LIGHT.obj"/>         <!-- 箭头引导灯（Section012 区域） -->
+    <mesh class="visual" name="V_bridge_Cylinder_BK" file="V_bridge_Cylinder_BK.obj"/>  <!-- 桥梁圆柱支撑 -->
+    <mesh class="visual" name="V_bridge_barrier_BK" file="V_bridge_barrier_BK.obj"/>    <!-- 桥梁护栏 -->
+    <mesh class="visual" name="V_bridge_step_BK" file="V_bridge_step_BK.obj"/>          <!-- 桥梁踏板 -->
+    <mesh class="visual" name="V_columnA_pt1_BK" file="V_columnA_pt1_BK.obj"/>          <!-- 装饰立柱主体 -->
+    <mesh class="visual" name="V_columnA_pt3_LIGHT" file="V_columnA_pt3_LIGHT.obj"/>    <!-- 装饰立柱红色灯 -->
+    <mesh class="visual" name="V_columnA_pt4_light" file="V_columnA_pt4_light.obj"/>    <!-- 装饰立柱白色灯 -->
+    <mesh class="visual" name="V_s2_END_gold_BK" file="V_s2_END_gold_BK.obj"/>          <!-- 终点金色装饰 -->
+    <mesh class="visual" name="V_s2_end_BK" file="V_s2_end_BK.obj"/>                    <!-- 终点平台 -->
+    <mesh class="visual" name="V_stepblock_BK" file="V_stepblock_BK.obj"/>              <!-- 楼梯台阶块本体 -->
+    <mesh class="visual" name="V_stepblock_outline" file="V_stepblock_outline.obj"/>    <!-- 楼梯台阶块轮廓（红色描边） -->
+
+    <!-- ========== Section011 视觉网格（重复定义以完整渲染）========== -->
+    <mesh class="visual" name="V_Section_1_END_BK" file="V_Section_1_END_BK.obj"/>            <!-- S1 终点平台 -->
+    <mesh class="visual" name="V_Section_1_GOLD_BK" file="V_Section_1_GOLD_BK.obj"/>          <!-- S1 金属装饰 -->
+    <mesh class="visual" name="V_Section_1_terrain_BK" file="V_Section_1_terrain_BK.obj"/>    <!-- S1 地面纹理 -->
+    <mesh class="visual" name="V_2026_LIGHT" file="V_2026_LIGHT.obj"/>                         <!-- "2026" 发光字 -->
+    <mesh class="visual" name="V_arrow_1_LIGHT" file="V_arrow_1_LIGHT.obj"/>                   <!-- S1 箭头引导灯 -->
+    <mesh class="visual" name="V_ground_left2_LIGHT" file="V_ground_left2_LIGHT.obj"/>         <!-- S1 地面侧灯 -->
+
+    <!-- Collision meshes —— 本文件无碰撞网格（纯视觉文件） -->
+  </asset>
+
+  <!-- ========== 默认属性 ========== -->
+  <default>
+      <!-- visual: group=2(渲染层), contype=0+conaffinity=0(不碰撞), density=0(无质量) -->
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" group="2" density="0"/>
+      </default>
+      <!-- collision: 本文件未使用，保留以兼容格式 -->
+      <default class="collision">
+        <geom type="mesh" rgba="1 1 1 1" group="3" contype="1" conaffinity="1"/>
+      </default>
+  </default>
+
+  <!-- ========== 场景几何体（所有视觉元素）========== -->
+  <!--
+    所有 geom 的 class="visual" → 不参与物理碰撞，仅用于渲染。
+    
+    Section012 视觉元素布局：
+      Y ≈ 10.3  地形底部入口（terrain, bluefloor, cones）
+      Y ≈ 15.2  装饰立柱（红/白灯柱）
+      Y ≈ 17.8  桥梁中心（barrier, cylinder, step, arrow）+ V型坡道
+      Y ≈ 24.3  终点平台（end, gold, ground_light）
+    
+    Section011 视觉元素：
+      Y ≈ 0     地面纹理
+      Y ≈ 3.07  箭头引导灯
+      Y ≈ 4.30  金属装饰带
+      Y ≈ 7.83  "2026" 发光字 + 终点平台
+  -->
+  <worldbody>
+
+    <body name="B_body" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+      <!-- ===== Section012 视觉 geom（Y ≈ 10 ~ 25）===== -->
+      <geom class="visual" mesh="V_arrow_3_LIGHT" pos="-2.999999523162842 17.731996536254883 2.7990949153900146" quat="1.0 0.0 0.0 0.0" material="MI_white_light"/>            <!-- 箭头引导灯 @ 桥梁区 Y≈17.7 -->
+      <geom class="visual" mesh="V_bridge_barrier_BK" pos="-4.319393157958984 17.829622268676758 2.810610055923462" quat="1.0 0.0 0.0 0.0" material="MI_bridge_barrier_BK"/>    <!-- 桥梁护栏 @ Y≈17.8 -->
+      <geom class="visual" mesh="V_bridge_Cylinder_BK" pos="-2.999999523162842 17.8212947845459 2.041141986846924" quat="1.0 0.0 0.0 0.0" material="MI_bridge_Cylinder_BK"/>    <!-- 桥梁圆柱支撑 @ Y≈17.8 -->
+      <geom class="visual" mesh="V_bridge_step_BK" pos="-3.0 17.821199417114258 2.578761339187622" quat="1.0 0.0 0.0 0.0" material="MI_bridge_step_BK"/>                       <!-- 桥梁踏板 @ Y≈17.8 -->
+      <geom class="visual" mesh="V_columnA_pt1_BK" pos="-1.6806052923202515 15.201314926147461 3.0117130279541016" quat="1.0 0.0 0.0 0.0" material="MI_columnA_pt1_BK"/>       <!-- 装饰立柱主体 @ Y≈15.2 -->
+      <geom class="visual" mesh="V_columnA_pt3_LIGHT" pos="-1.6806052923202515 15.201314926147461 3.0117130279541016" quat="1.0 0.0 0.0 0.0" material="RED_light.001"/>        <!-- 装饰立柱红色灯 -->
+      <geom class="visual" mesh="V_columnA_pt4_light" pos="-1.6806052923202515 15.201314926147461 3.0117130279541016" quat="1.0 0.0 0.0 0.0" material="MI_white_light"/>       <!-- 装饰立柱白色灯 -->
+      <geom class="visual" mesh="V_Cone_BK" pos="4.76837158203125e-07 10.329628944396973 1.9533356428146362" quat="1.0 0.0 0.0 0.0" material="MI_Cone_BK"/>                    <!-- 锥形路障 @ Y≈10.3 -->
+      <geom class="visual" mesh="V_GoldBall_BK" pos="1.9437782764434814 17.788362503051758 1.1200001239776611" quat="1.0 0.0 0.0 0.0" material="MI_GoldBall_BK"/>              <!-- 金球装饰 @ Y≈17.8 -->
+      <geom class="visual" mesh="V_S2_bluefloor_BK" pos="2.384185791015625e-07 15.912961959838867 1.127428650856018" quat="1.0 0.0 0.0 0.0" material="MI_S2_bluefloor_BK"/>    <!-- 蓝色地板 @ Y≈15.9 -->
+      <geom class="visual" mesh="V_S2_daji_LIGHT" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" material="YELLOW_light.006"/>                                                     <!-- 大型黄色灯光/标识 -->
+      <geom class="visual" mesh="V_s2_end_BK" pos="5.250000953674316 24.329627990722656 1.8940951824188232" quat="1.9470718370939721e-07 0.0 0.0 -1.0" material="MI_s2_end_BK"/>  <!-- 终点平台 @ Y≈24.3 -->
+      <geom class="visual" mesh="V_s2_END_gold_BK" pos="2.967199559972565e-16 24.329627990722656 1.2940952777862549" quat="1.0 0.0 0.0 0.0" material="MI_s2_END_gold_BK"/>      <!-- 终点金色装饰 @ Y≈24.3 -->
+      <geom class="visual" mesh="V_S2_ground_light" pos="4.76837158203125e-07 24.329627990722656 1.8940951824188232" quat="1.0 0.0 0.0 0.0" material="MI_white_light"/>         <!-- 终点地面灯 @ Y≈24.3 -->
+      <geom class="visual" mesh="V_S2_Little_Light" pos="-3.473833487532829e-07 17.652734756469727 1.6798871755599976" quat="1.0 0.0 0.0 0.0" material="MI_white_light"/>       <!-- 桥梁区小灯 @ Y≈17.7 -->
+      <geom class="visual" mesh="V_S2_SLOP_BK" pos="4.76837158203125e-07 17.829627990722656 2.294095277786255" quat="1.0 0.0 0.0 0.0" material="MI_S2_SLOP_BK"/>               <!-- V型坡道贴图面 @ Y≈17.8 -->
+      <geom class="visual" mesh="V_Section_2_terrain_BK" pos="4.76837158203125e-07 10.329628944396973 1.2940952777862549" quat="1.0 0.0 0.0 0.0" material="MI_Section_2_terrain_BK"/>  <!-- Section012 整体地面纹理 @ Y≈10.3 -->
+      <geom class="visual" mesh="V_stepblock_BK" pos="-0.47903966903686523 17.337711334228516 1.8420194387435913" quat="1.0 0.0 0.0 0.0" material="MI_stepblock_BK"/>           <!-- 楼梯台阶块主体 @ Y≈17.3 -->
+      <geom class="visual" mesh="V_stepblock_outline" pos="-0.47903966903686523 17.337711334228516 1.8420194387435913" quat="1.0 0.0 0.0 0.0" material="MI_RED"/>               <!-- 楼梯台阶块红色轮廓描边 -->
+      <!-- ===== Section011 视觉 geom（Y ≈ 0 ~ 8，重复定义）===== -->
+      <geom class="visual" mesh="V_Section_1_terrain_BK" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0" material="MI_Section_1_terrain_BK"/>                                        <!-- S1 整体地面纹理 -->
+      <geom class="visual" mesh="V_Section_1_END_BK" pos="2.967199559972565e-16 7.829628944396973 1.2940952777862549" quat="1.0 0.0 0.0 0.0" material="MI_Section_1_END_BK"/>  <!-- S1 终点平台 @ Y≈7.83 -->
+      <geom class="visual" mesh="V_Section_1_GOLD_BK" pos="0.0 4.300259113311768 0.6168984770774841" quat="1.0 0.0 0.0 0.0" material="MI_Section_1_GOLD_BK"/>                 <!-- S1 金属装饰带 @ Y≈4.30 -->
+      <geom class="visual" mesh="V_2026_LIGHT" pos="0.0 7.789973258972168 1.0088530778884888" quat="1.0 0.0 0.0 0.0" material="YELLOW_light.006"/>                              <!-- "2026" 发光字 @ Y≈7.79 -->
+      <geom class="visual" mesh="V_arrow_1_LIGHT" pos="2.384185791015625e-07 3.0717613697052 0.2923547327518463" quat="1.0 0.0 0.0 0.0" material="MI_white_light"/>             <!-- S1 箭头引导灯 @ Y≈3.07 -->
+      <geom class="visual" mesh="V_ground_left2_LIGHT" pos="4.76837158203125e-07 1.9148139953613281 1.2470474243164062" quat="1.0 0.0 0.0 0.0" material="MI_white_light"/>      <!-- S1 地面侧灯 @ Y≈1.91 -->
+    </body>
+  </worldbody>
+</mujoco>

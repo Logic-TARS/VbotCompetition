@@ -1,0 +1,120 @@
+<!--
+  ===================================================================
+  Section011 碰撞模型 — 楼梯/平台地形的物理碰撞体
+  ===================================================================
+  
+  文件角色：C = Collision（参与物理仿真，机器人可以踩踏/碰撞）
+  
+  在 scene_section011_012.xml 中通过以下方式引入：
+    <model name="section011C" file="0303_C_section01.xml"/>
+    <attach model="section011C" prefix="C1_"/>
+  所有名称自动加上 C1_ 前缀（如 ground_root → C1_ground_root）
+  
+  赛道覆盖范围：Y ≈ -5 到 Y ≈ 8.8
+  
+  碰撞结构（从起点到终点）：
+    B_Abianjie  — 边界墙（左右两侧 + 后方挡板），防止机器人掉落
+    B_Adiban    — 地板/平台系统：
+                  001: 起跑区平台 (Y=-3.5~-1.5, Z=0)
+                  002: 过渡板 (Y≈1.5~2.0)
+                  003: 上升斜坡 (Y≈2~7, 10°倾斜，Z从0升到≈1.04)
+                  004: Section011 终点平台 (Y≈6.8~8.8, Z≈1.04)
+                  005: 主平台 (Y=-1.5~1.5, Z=0)
+    B_Adixing   — heightfield 地形（PNG高度图驱动的起伏地面）
+  
+  注意：ground_root 是全部碰撞体的根节点，
+        传感器通过 C1_ground_root 引用此层级
+  ===================================================================
+-->
+<mujoco>
+  <compiler angle="radian" assetdir="assets" autolimits="true"/>
+
+  <asset>
+    <!-- heightfield 地形高度图：
+         file: 16位灰度 PNG，白色=高，黑色=低
+         size: [半宽X=5m, 半长Y=1.5m, 最大高度=0.277m, 最小高度=0m] -->
+    <hfield name="hfield_terrain" file="H_section_01_0122_16.png" size="5 1.5 0.277056 0"/>
+  </asset>
+
+  <!-- ========== 碰撞体默认属性 ========== -->
+  <!--
+    命名规则：
+      Abianjie = A(Section011)边界  → 边界墙
+      Adiban   = A(Section011)地板  → 地板/平台
+      Adixing  = A(Section011)地形  → heightfield 起伏地面
+    
+    size 含义（box类型）：[半宽X, 半长Y, 半高Z]
+    pos 含义：[X, Y, Z] 各轴中心位置
+  -->
+  <default>
+    <default class="collision">
+      <geom type="mesh" group="3" contype="1" conaffinity="1"/>
+      <!-- ===== 边界墙 Abianjie（5面围墙） ===== -->
+      <default class="C_Abianjie_001">
+        <geom type="box" size="0.25 3.0 1.22660493850708" quat="1.0 0.0 0.0 0.0" pos="5.25 -1.0 1.22660493850708" density="1000.0"/>  <!-- 右墙前段 X=5.25 -->
+      </default>
+      <default class="C_Abianjie_002">
+        <geom type="box" size="0.25 3.4148149490356445 1.25" quat="1.0 0.0 0.0 0.0" pos="5.25 5.4148149490356445 1.22660493850708" density="1000.0"/>  <!-- 右墙后段 X=5.25 -->
+      </default>
+      <default class="C_Abianjie_003">
+        <geom type="box" size="0.25 3.0 1.22660493850708" quat="1.0 0.0 0.0 0.0" pos="-5.25 -1.0 1.22660493850708" density="1000.0"/>  <!-- 左墙前段 X=-5.25 -->
+      </default>
+      <default class="C_Abianjie_004">
+        <geom type="box" size="0.25 3.4148149490356445 1.22660493850708" quat="1.0 0.0 0.0 0.0" pos="-5.25 5.4148149490356445 1.22660493850708" density="1000.0"/>  <!-- 左墙后段 X=-5.25 -->
+      </default>
+      <default class="C_Abianjie_005">
+        <geom type="box" size="5.0 0.24999988079071045 1.22660493850708" quat="1.0 0.0 0.0 0.0" pos="0.0 -3.75 1.22660493850708" density="1000.0"/>  <!-- 后方挡板 Y=-3.75 -->
+      </default>
+      <!-- ===== 地板/平台 Adiban（5块平板拼接） ===== -->
+      <default class="C_Adiban_001">
+        <geom type="box" size="5.0 1.0 0.25" quat="1.0 0.0 0.0 0.0" pos="0.0 -2.5 -0.25" density="1000.0"/>          <!-- 起跑区平台 Y=-3.5~-1.5, 表面Z=0 -->
+      </default>
+      <default class="C_Adiban_002">
+        <geom type="box" size="5.0 0.25 0.25" quat="1.0 0.0 0.0 0.0" pos="0.0 1.75 -0.25" density="1000.0"/>           <!-- 过渡薄板 Y≈1.5~2.0 -->
+      </default>
+      <default class="C_Adiban_003">
+        <geom type="box" size="5.0 2.5 0.25" quat="0.9914449 0.1305262 0.0 0.0" pos="0.0 4.479518890380859 0.4055659770965576" density="1000.0"/>  <!-- ★上升斜坡 Y≈2~7, 绕X轴旋转≈15°, Z从0升到≈1.04 -->
+      </default>
+      <default class="C_Adiban_004">
+        <geom type="box" size="5.0 1.0 0.25" quat="1.0 0.0 0.0 0.0" pos="0.0 7.8296284675598145 1.0440951585769653" density="1000.0"/>  <!-- Section011终点平台 Y≈6.8~8.8, 表面Z≈1.29 -->
+      </default>
+      <default class="C_Adiban_005">
+        <geom type="box" size="5.0 1.5 0.25" quat="1.0 0.0 0.0 0.0" pos="0.0 0.0 -0.25" density="1000.0"/>             <!-- 主平台 Y=-1.5~1.5, 表面Z=0 -->
+      </default>
+    </default>
+  </default>
+
+  <!-- ========== 物理世界 ========== -->
+  <!--
+    层级结构：
+      ground_root（根节点，挂载后变为 C1_ground_root）
+        ├── B_Abianjie  — 5面边界墙
+        ├── B_Adiban    — 5块地板/平台
+        └── B_Adixing   — heightfield 起伏地形
+  -->
+  <worldbody>
+    <body name="ground_root">
+      <!-- 边界墙：防止机器人掉出赛道 -->
+      <body name="B_Abianjie" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+        <geom name="Abianjie_001" class="C_Abianjie_001"/>
+        <geom name="Abianjie_002" class="C_Abianjie_002"/>
+        <geom name="Abianjie_003" class="C_Abianjie_003"/>
+        <geom name="Abianjie_004" class="C_Abianjie_004"/>
+        <geom name="Abianjie_005" class="C_Abianjie_005"/>
+      </body>
+      <!-- 地板/平台系统：5块平板拼接成从起点到终点的地面 -->
+      <body name="B_Adiban" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+        <geom name="Adiban_001" class="C_Adiban_001"/>  <!-- 起跑区 -->
+        <geom name="Adiban_002" class="C_Adiban_002"/>  <!-- 过渡板 -->
+        <geom name="Adiban_003" class="C_Adiban_003"/>  <!-- ★斜坡（关键：连接起跑区和终点平台） -->
+        <geom name="Adiban_004" class="C_Adiban_004"/>  <!-- 终点平台 -->
+        <geom name="Adiban_005" class="C_Adiban_005"/>  <!-- 主平台 -->
+      </body>
+      <!-- heightfield 起伏地形：PNG灰度图驱动的物理地面 -->
+      <body name="B_Adixing" pos="0.0 0.0 0.0" quat="1.0 0.0 0.0 0.0">
+        <geom name="V_Adixing_Plane" type="hfield" hfield="hfield_terrain" pos="0 0 0" quat="1 0 0 0" group="3" contype="1" conaffinity="1" friction="0.8" solref="0.02 1" condim="3"/>
+        <!-- friction=0.8: 摩擦系数  solref="0.02 1": 接触求解器参数  condim=3: 3维摩擦锥 -->
+    </body>
+    </body>
+  </worldbody>
+</mujoco>
