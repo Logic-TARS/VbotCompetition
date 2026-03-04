@@ -438,8 +438,8 @@ class CompetitionConfig:
     ])
     hongbao_radius: float = 0.5
     
-    # 终点区域
-    finish_zone_center: list = field(default_factory=lambda: [0.0, 10.2])
+    # 终点区域 — 2026平台中心 (碰撞体 Adiban_004 的中心Y=7.83, 表面Z≈1.294)
+    finish_zone_center: list = field(default_factory=lambda: [0.0, 7.83])
     finish_zone_radius: float = 1.0
     
     # 边界限制
@@ -469,6 +469,21 @@ class VBotSection011EnvCfg(VBotStairsEnvCfg):
     # 关闭时：观测空间=81维(含竞赛特征)，动作控制=位置控制
     curriculum_from_001: bool = False
 
+    # ===== 崎岖地形适应 =====
+    # 开启后：扩展观测空间（状态历史+足部接触力），用于应对复杂地形
+    # 观测空间从81维扩展为 81 + 12(foot_force_body) + 1(base_height_norm)
+    #   + N*27(历史帧: joint_pos_rel:12 + joint_vel:12 + gravity:3) = 94 + N*27
+    rough_terrain_mode: bool = False
+    state_history_length: int = 3        # 历史帧数（0=不用历史，推荐3~5）
+
+    # 奖励系数覆盖（崎岖地形专用）
+    rough_attitude_penalty_scale: float = 0.1     # 姿态惩罚系数（平地0.5→崎岖0.1，放宽）
+    rough_foot_clearance_scale: float = 1.0       # 抬脚高度奖励系数
+    rough_foot_clearance_target: float = 0.08     # 目标抬脚高度（m），高于此给奖励
+    rough_stumble_penalty_scale: float = 0.5      # 绊倒惩罚（水平接触力过大）
+    rough_feet_air_time_target: float = 0.25      # 目标腾空时间（s），鼓励抬腿步态
+    rough_contact_force_penalty_scale: float = 0.01  # 过大接触力惩罚
+
     @dataclass
     class InitState:
         # 起始位置：随机化范围内生成
@@ -491,14 +506,9 @@ class VBotSection011EnvCfg(VBotStairsEnvCfg):
         }
     @dataclass
     class Commands:
-        # 目标位置：缩短距离，固定目标点
-        # 起始位置Y=-2.4, 目标Y=3.6, 距离=6米（与vbot_np相近）
-        # pose_command_range = [0.0, 3.6, 0.0, 0.0, 3.6, 0.0]
-        # 原始配置（已注释）：
-        # 目标位置：固定在终止角范围远端（完全无随机化）
-        # 固定目标点: X=0, Y=10.2, Z=2 (Z通过XML控制)
-        # 起始位置Y=-2.4, 目标Y=10.2, 距离=12.6米
-        pose_command_range = [0.0, 10.2, 0.0, 0.0, 10.2, 0.0]
+        # 目标位置：固定在2026平台中心 (Y=7.83)
+        # 起始位置Y=-2.4, 目标Y=7.83, 距离≈10.23米
+        pose_command_range = [0.0, 7.83, 0.0, 0.0, 7.83, 0.0]
     @dataclass
     class ControlConfig:
         stiffness = 60   # [N*m/rad] PD控制刚度（课程模式使用，与section001一致）

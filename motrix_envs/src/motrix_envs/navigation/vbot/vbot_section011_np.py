@@ -8,6 +8,12 @@ from motrix_envs.np.env import NpEnv, NpEnvState
 
 from .cfg import VBotSection011EnvCfg
 
+# ==================== 竞赛场景常量（与section012一致） ====================
+FALL_THRESHOLD_ROLL_PITCH = np.deg2rad(45.0)
+MIN_STANDING_HEIGHT_RATIO = 0.4   # 低于目标高度40%视为摔倒
+GRACE_PERIOD_STEPS = 10           # 重置后的宽限期（步数）— 与012一致
+TERMINATION_PENALTY = -50.0       # 终止惩罚（与012一致，-200→-50）
+
 
 @registry.env("vbot_navigation_section011", "np")
 class VBotSection011Env(NpEnv):
@@ -29,6 +35,21 @@ class VBotSection011Env(NpEnv):
         self._curriculum_from_001 = bool(getattr(cfg, "curriculum_from_001", False))
         if self._curriculum_from_001:
             self._log("[CURRICULUM] 课程学习模式已启用: obs=54维, action=PD力矩控制 (兼容section001)")
+
+        # ===== 崎岖地形适应模式 =====
+        self._rough_terrain = bool(getattr(cfg, "rough_terrain_mode", False))
+        self._state_history_len = int(getattr(cfg, "state_history_length", 3)) if self._rough_terrain else 0
+        if self._rough_terrain:
+            self._log(f"[ROUGH TERRAIN] 崎岖地形模式已启用: "
+                      f"足部接触力+base_height+状态历史({self._state_history_len}帧)")
+
+        # 互斥校验：课程模式要求观测空间=54维（兼容section001），崎岖地形会扩展观测维度
+        if self._curriculum_from_001 and self._rough_terrain:
+            raise ValueError(
+                "curriculum_from_001 与 rough_terrain_mode 不可同时启用！"
+                "课程模式要求观测空间为54维以兼容section001预训练权重，"
+                "而崎岖地形模式会扩展观测空间维度，导致权重无法加载。"
+            )
 
         # Initialize robot body and contacts
         self._body = self._model.get_body(cfg.asset.body_name)
@@ -52,7 +73,19 @@ class VBotSection011Env(NpEnv):
             # 课程模式: 54维观测空间，与section001完全一致
             # linvel:3, gyro:3, gravity:3, joint_angle:12, joint_vel:12, last_actions:12,
             # commands:3, position_error:2, heading_error:1, distance:1, reached:1, stop_ready:1
-            self._observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(54,), dtype=np.float32)
+            self._obs_base_dim = 54
+            self._obs_terrain_dim = 0
+            self._obs_history_frame_dim = 0
+            self._obs_total_dim = 54
+        elif self._rough_terrain:
+            # 崎岖地形模式: 54 + 17 + N*27 维观测空间（与section012完全一致）
+            # base_54 + foot_contacts:4 + foot_forces_body:12 + base_height:1
+            # + N * (joint_pos_rel:12 + joint_vel:12 + gravity:3) = 71 + N*27
+            self._obs_base_dim = 54
+            self._obs_terrain_dim = 17  # 4(foot_contacts) + 12(foot_forces_body) + 1(base_height)
+            self._obs_history_frame_dim = 27  # 12 + 12 + 3
+            self._obs_total_dim = (self._obs_base_dim + self._obs_terrain_dim
+                                   + self._state_history_len * self._obs_history_frame_dim)
         else:
             # 标准模式: 81维观测空间 (60 base + 21 competition-specific)
             # Base: 60 (linvel:3, gyro:3, gravity:3, joint_angle:12, joint_vel:12, last_actions:12,
@@ -60,7 +93,15 @@ class VBotSection011Env(NpEnv):
             #           base_height:1, base_height_error:1, foot_contacts:4)
             # Competition: 21 (smiley_relative_pos:6, hongbao_relative_pos:6, trigger_flags:6,
             #                   finish_relative_pos:2, finish_flag:1)
-            self._observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(81,), dtype=np.float32)
+            self._obs_base_dim = 81
+            self._obs_terrain_dim = 0
+            self._obs_history_frame_dim = 0
+            self._obs_total_dim = 81
+
+        self._observation_space = gym.spaces.Box(
+            low=-np.inf, high=np.inf,
+            shape=(self._obs_total_dim,), dtype=np.float32
+        )
 
         self._num_dof_pos = self._model.num_dof_pos
         self._num_dof_vel = self._model.num_dof_vel
@@ -107,13 +148,14 @@ class VBotSection011Env(NpEnv):
                 if name in self._model.actuator_names[i]:
                     self.default_angles[i] = angle
 
+        # Fix: 将默认关节角写入 _init_dof_pos（与section012一致）
+        self._init_dof_pos[-self._num_action:] = self.default_angles
+
         self.action_filter_alpha = 0.3
 
-        # ===== 课程模式: PD增益（与section001一致） =====
-        if self._curriculum_from_001:
-            self.kps = np.ones(self._num_action, dtype=np.float32) * getattr(cfg.control_config, 'stiffness', 60.0)
-            self.kds = np.ones(self._num_action, dtype=np.float32) * getattr(cfg.control_config, 'damping', 0.8)
-            self.gravity_vec = np.array([0, 0, -1], dtype=np.float32)
+        # PD增益（与section012一致，始终初始化）
+        self.kp = float(getattr(cfg.control_config, 'stiffness', 60.0))
+        self.kv = float(getattr(cfg.control_config, 'damping', 0.8))
 
         # === Anti-reward-hacking parameters ===
         # Target base height (from init_state.pos[2], the robot's nominal standing height)
@@ -164,7 +206,7 @@ class VBotSection011Env(NpEnv):
             self.smiley_radius = 0.5
             self.hongbao_positions = np.array([[1.0, 2.5], [1.0, 7.5], [1.0, 12.5]], dtype=np.float32)
             self.hongbao_radius = 0.5
-            self.finish_zone_center = np.array([0.0, 10.2], dtype=np.float32)
+            self.finish_zone_center = np.array([0.0, 7.83], dtype=np.float32)  # 2026平台中心
             self.finish_zone_radius = 1.0
             self.boundary_x_min = -20.0
             self.boundary_x_max = 20.0
@@ -200,26 +242,88 @@ class VBotSection011Env(NpEnv):
         # Cumulative scores for tracking (not used in reward, just for logging)
         self.cumulative_scores = np.zeros(n, dtype=np.float32)
 
+        # ===== base_contact 传感器预校验（与section012一致） =====
+        self._base_contact_sensor = getattr(cfg.sensor, 'base_contact', 'base_contact')
+        try:
+            self._model.get_sensor_value(self._base_contact_sensor,
+                                         mtx.SceneData(self._model, batch=[1]))
+            self._base_contact_available = True
+        except Exception as e:
+            print(f"[WARNING] base_contact 传感器 '{self._base_contact_sensor}' 不存在: {e}")
+            print("[WARNING] 基座接触摔倒检测将被禁用！")
+            self._base_contact_available = False
+
+        # ===== 崎岖地形: 足部传感器 =====
+        self._foot_sensor_names = [f"{foot}_foot_contact" for foot in cfg.sensor.feet]
+        self._num_feet = len(cfg.sensor.feet)
+
+        # 崎岖地形参数缓存
+        if self._rough_terrain:
+            self._rough_attitude_scale = float(getattr(cfg, 'rough_attitude_penalty_scale', 0.1))
+            self._rough_clearance_scale = float(getattr(cfg, 'rough_foot_clearance_scale', 1.0))
+            self._rough_clearance_target = float(getattr(cfg, 'rough_foot_clearance_target', 0.08))
+            self._rough_stumble_scale = float(getattr(cfg, 'rough_stumble_penalty_scale', 0.5))
+
     def _find_target_marker_dof_indices(self):
-        """Find target_marker indices in dof_pos"""
+        """查找target_marker在dof_pos中的索引位置
+
+        DOF layout:
+          0-2:  target_marker (slide x, slide y, hinge yaw)
+          3-5:  base position (x, y, z)
+          6-9:  base quaternion (qx, qy, qz, qw)
+          10-21: joint angles (12)
+        """
+        n_dof = self._model.num_dof_pos
+        n_actuators = self._model.num_actuators
+
         self._target_marker_dof_start = 0
         self._target_marker_dof_end = 3
-        self._init_dof_pos[0:3] = [0.0, 0.0, 0.0]
+        self._base_pos_start = 3
+        self._base_pos_end = 6
         self._base_quat_start = 6
         self._base_quat_end = 10
+        self._joint_dof_start = 10
+        self._joint_dof_end = 10 + n_actuators
+
+        self._init_dof_pos[0:3] = [0.0, 0.0, 0.0]
+
+        # 验证模型DOF布局是否匹配预期（与section012一致）
+        expected_min = 3 + 7 + n_actuators  # marker(3) + base(7) + joints
+        assert n_dof >= expected_min, (
+            f"DOF layout mismatch: expected at least {expected_min} DOFs "
+            f"(3 marker + 7 base + {n_actuators} joints), got {n_dof}"
+        )
 
     def _find_arrow_dof_indices(self):
-        """Find arrow indices in dof_pos"""
-        self._robot_arrow_dof_start = 22
-        self._robot_arrow_dof_end = 29
-        self._desired_arrow_dof_start = 29
-        self._desired_arrow_dof_end = 36
+        """查找箭头在dof_pos中的索引位置
+
+        基于joint终止位置推算（与section012一致），而非硬编码。
+
+        DOF layout (following joints):
+          joint_end ~ joint_end+6: robot_heading_arrow freejoint (3 pos + 4 quat)
+          joint_end+7 ~ joint_end+13: desired_heading_arrow freejoint (3 pos + 4 quat)
+        """
+        arrow_base = self._joint_dof_end
+        self._robot_arrow_dof_start = arrow_base
+        self._robot_arrow_dof_end = arrow_base + 7
+        self._desired_arrow_dof_start = arrow_base + 7
+        self._desired_arrow_dof_end = arrow_base + 14
+
+        # 验证不越界
+        assert self._desired_arrow_dof_end <= self._model.num_dof_pos, (
+            f"Arrow DOF range [{self._robot_arrow_dof_start}:{self._desired_arrow_dof_end}] "
+            f"exceeds model DOF count {self._model.num_dof_pos}"
+        )
 
         arrow_init_height = self._cfg.init_state.pos[2] + 0.5
         if self._robot_arrow_dof_end <= len(self._init_dof_pos):
-            self._init_dof_pos[self._robot_arrow_dof_start:self._robot_arrow_dof_end] = [0.0, 0.0, arrow_init_height, 0.0, 0.0, 0.0, 1.0]
+            self._init_dof_pos[self._robot_arrow_dof_start:self._robot_arrow_dof_end] = [
+                0.0, 0.0, arrow_init_height, 0.0, 0.0, 0.0, 1.0
+            ]
         if self._desired_arrow_dof_end <= len(self._init_dof_pos):
-            self._init_dof_pos[self._desired_arrow_dof_start:self._desired_arrow_dof_end] = [0.0, 0.0, arrow_init_height, 0.0, 0.0, 0.0, 1.0]
+            self._init_dof_pos[self._desired_arrow_dof_start:self._desired_arrow_dof_end] = [
+                0.0, 0.0, arrow_init_height, 0.0, 0.0, 0.0, 1.0
+            ]
 
     def _init_contact_geometry(self):
         """Initialize contact geometry"""
@@ -232,13 +336,23 @@ class VBotSection011Env(NpEnv):
         if self._debug_logs:
             print(message)
 
+    def _get_foot_contact_forces_body(self, data: mtx.SceneData,
+                                       root_quat: np.ndarray) -> np.ndarray:
+        """获取4只脚的接触力（转换到body frame），返回 (n_envs, 12)"""
+        n_envs = data.shape[0]
+        forces = []
+        for sensor_name in self._foot_sensor_names:
+            try:
+                force_world = self._model.get_sensor_value(sensor_name, data)  # (n_envs, 3)
+                force_body = Quaternion.rotate_inverse(root_quat, force_world)
+                forces.append(force_body)
+            except Exception:
+                forces.append(np.zeros((n_envs, 3), dtype=np.float32))
+        return np.concatenate(forces, axis=-1)  # (n_envs, 12)
+
     def apply_action(self, actions: np.ndarray, state: NpEnvState) -> NpEnvState:
-        """Apply actions to the environment.
-        
-        课程模式: PD力矩控制 (与section001一致)
-        标准模式: 位置控制 (原始section011行为)
-        """
-        state.info["last_dof_vel"] = self._body.get_joint_dof_vel(state.data)
+        """应用动作：带低通滤波的PD力矩控制（与section012一致）"""
+        state.info["last_dof_vel"] = self.get_dof_vel(state.data)
 
         state.info["last_actions"] = state.info.get(
             "current_actions",
@@ -256,28 +370,41 @@ class VBotSection011Env(NpEnv):
             )
 
         state.info["current_actions"] = state.info["filtered_actions"]
-
-        if self._curriculum_from_001:
-            # 课程模式: PD力矩控制 (与section001的_compute_torques一致)
-            state.data.actuator_ctrls = self._compute_torques(
-                state.info["filtered_actions"], state.data
-            )
-        else:
-            # 标准模式: 位置控制
-            target_pos = self.default_angles + state.info["current_actions"] * self._cfg.control_config.action_scale
-            state.data.actuator_ctrls = target_pos
+        state.data.actuator_ctrls = self._compute_torques(
+            state.info["filtered_actions"], state.data
+        )
 
         return state
 
     def _compute_torques(self, actions, data):
-        """计算PD控制力矩 (课程模式专用，与section001一致)"""
-        actions_scaled = actions * self._cfg.control_config.action_scale
-        dof_pos = self._body.get_joint_dof_pos(data)
-        dof_vel = self._body.get_joint_dof_vel(data)
-        torques = self.kps * (
-            actions_scaled + self.default_angles - dof_pos
-        ) - self.kds * dof_vel
+        """PD力矩控制（与section012一致）
+
+        课程模式: 无力矩限幅（与section001一致）
+        标准模式: 限幅 [17, 17, 34]*4
+        """
+        action_scaled = actions * self._cfg.control_config.action_scale
+        target_pos = self.default_angles + action_scaled
+
+        current_pos = self.get_dof_pos(data)
+        current_vel = self.get_dof_vel(data)
+
+        pos_error = target_pos - current_pos
+        torques = self.kp * pos_error - self.kv * current_vel
+
+        if not self._curriculum_from_001:
+            # 标准模式: 限幅保护（与section012一致）
+            torque_limits = np.array([17, 17, 34] * 4, dtype=np.float32)
+            torques = np.clip(torques, -torque_limits, torque_limits)
+
         return torques
+
+    # ==================== 状态访问 ====================
+
+    def get_dof_pos(self, data: mtx.SceneData):
+        return self._body.get_joint_dof_pos(data)
+
+    def get_dof_vel(self, data: mtx.SceneData):
+        return self._body.get_joint_dof_vel(data)
 
     def _extract_root_state(self, data: mtx.SceneData):
         """Extract root position, quaternion and velocity"""
@@ -287,14 +414,25 @@ class VBotSection011Env(NpEnv):
         root_vel = self._model.get_sensor_value(self._cfg.sensor.base_linvel, data)
         return root_pos, root_quat, root_vel
 
+    def _quat_to_roll_pitch(self, root_quat: np.ndarray):
+        """从四元数提取roll和pitch（与section012一致）"""
+        qx, qy, qz, qw = root_quat[:, 0], root_quat[:, 1], root_quat[:, 2], root_quat[:, 3]
+        sinr_cosp = 2 * (qw * qx + qy * qz)
+        cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
+        roll = np.arctan2(sinr_cosp, cosr_cosp)
+        sinp = np.clip(2 * (qw * qy - qz * qx), -1.0, 1.0)
+        pitch = np.arcsin(sinp)
+        return roll, pitch
+
     def _compute_observation(self, data: mtx.SceneData, state: NpEnvState):
         """Compute observations for the environment"""
         cfg = self._cfg
 
         # Extract state
         root_pos, root_quat, root_vel = self._extract_root_state(data)
-        joint_pos = self._body.get_joint_dof_pos(data)
-        joint_vel = self._body.get_joint_dof_vel(data)
+        joint_pos = self.get_dof_pos(data)
+        joint_vel = self.get_dof_vel(data)
+        joint_pos_rel = joint_pos - self.default_angles
 
         # Base linear velocity and gyro from sensors
         base_lin_vel = self._model.get_sensor_value(cfg.sensor.base_linvel, data)
@@ -304,9 +442,6 @@ class VBotSection011Env(NpEnv):
         gravity_world = np.array([0, 0, -1], dtype=np.float32)
         gravity_world = np.tile(gravity_world, (data.shape[0], 1))
         projected_gravity = Quaternion.rotate_inverse(root_quat, gravity_world)
-
-        # Joint angles relative to default
-        joint_pos_rel = joint_pos[:, -self._num_action:] - self.default_angles
 
         # Current robot heading (yaw angle)
         robot_heading = np.arctan2(
@@ -347,7 +482,7 @@ class VBotSection011Env(NpEnv):
         noisy_linvel = base_lin_vel * cfg.normalization.lin_vel
         noisy_gyro = gyro * cfg.normalization.ang_vel
         noisy_joint_angle = joint_pos_rel * cfg.normalization.dof_pos
-        noisy_joint_vel = joint_vel[:, -self._num_action:] * cfg.normalization.dof_vel
+        noisy_joint_vel = joint_vel * cfg.normalization.dof_vel
         command_normalized = velocity_commands * self.commands_scale
         last_actions = state.info["current_actions"]
 
@@ -452,59 +587,116 @@ class VBotSection011Env(NpEnv):
             )
             assert obs.shape == (data.shape[0], 54), f"[CURRICULUM] Expected obs shape (*, 54), got {obs.shape}"
         else:
-            # 标准模式: 81维观测
-            obs = np.concatenate(
-                [
-                    noisy_linvel,       # 3
-                    noisy_gyro,         # 3
-                    projected_gravity,  # 3
-                    noisy_joint_angle,  # 12
-                    noisy_joint_vel,    # 12
-                    last_actions,       # 12
-                    command_normalized, # 3
-                    position_error_normalized,  # 2
-                    heading_error_normalized[:, np.newaxis],  # 1
-                    distance_normalized[:, np.newaxis],  # 1
-                    reached_flag[:, np.newaxis],  # 1
-                    stop_ready_flag[:, np.newaxis],  # 1
-                    # Anti-reward-hacking observations
-                    base_height_normalized[:, np.newaxis],  # 1 (base height / target)
-                    base_height_error[:, np.newaxis],  # 1 (height error / target)
-                    foot_contacts,  # 4 (FR, FL, RR, RL foot contacts)
-                    # Competition-specific observations
-                    smiley_relative_pos,  # 6
-                    hongbao_relative_pos,  # 6
-                    trigger_flags,  # 6
-                    finish_relative_pos,  # 2
-                    finish_flag,  # 1
-                ],
-                axis=-1,
-            )
-            assert obs.shape == (data.shape[0], 81), f"Expected obs shape (*, 81), got {obs.shape}"
+            if self._rough_terrain:
+                # ===== 崎岖地形模式: 54 + 17 + N*27（与section012完全一致）=====
+                num_envs = data.shape[0]
+
+                # 54维基础观测（与 curriculum / section012 base 一致）
+                base_obs = np.concatenate(
+                    [
+                        noisy_linvel,       # 3
+                        noisy_gyro,         # 3
+                        projected_gravity,  # 3
+                        noisy_joint_angle,  # 12
+                        noisy_joint_vel,    # 12
+                        last_actions,       # 12
+                        command_normalized, # 3
+                        position_error_normalized,  # 2
+                        heading_error_normalized[:, np.newaxis],  # 1
+                        distance_normalized[:, np.newaxis],  # 1
+                        reached_flag[:, np.newaxis],  # 1
+                        stop_ready_flag[:, np.newaxis],  # 1
+                    ],
+                    axis=-1,
+                )
+
+                # 1. 足部接触力 (body frame, 4腿 x 3轴 = 12维)
+                foot_forces_body = self._get_foot_contact_forces_body(data, root_quat)
+                state.info["foot_forces_body"] = foot_forces_body
+
+                # 2. 足部是否接触地面 (4维 binary，与section012一致)
+                foot_contacts = (np.linalg.norm(
+                    foot_forces_body.reshape(num_envs, self._num_feet, 3), axis=-1
+                ) > 0.1).astype(np.float32)  # (n_envs, 4)
+                state.info["foot_contacts"] = foot_contacts
+
+                # 3. 归一化基座高度 (1维)
+                base_height_normalized = (root_pos[:, 2] / self.base_height_target)[:, np.newaxis]
+
+                # 4. 状态历史 (N * 27维) — 用于隐式地形推断
+                current_frame = np.concatenate([
+                    noisy_joint_angle,    # 12
+                    noisy_joint_vel,      # 12
+                    projected_gravity,    # 3
+                ], axis=-1)  # (n_envs, 27)
+
+                # 更新历史缓冲区 (FIFO)
+                history_buffer = state.info.get("state_history", None)
+                if history_buffer is None or history_buffer.shape[0] != num_envs:
+                    history_buffer = np.tile(
+                        current_frame[:, np.newaxis, :],
+                        (1, self._state_history_len, 1)
+                    )
+                else:
+                    history_buffer = np.concatenate([
+                        current_frame[:, np.newaxis, :],
+                        history_buffer[:, :-1, :]
+                    ], axis=1)
+                state.info["state_history"] = history_buffer
+
+                history_flat = history_buffer.reshape(num_envs, -1)
+
+                # 拼接完整观测（顺序与section012完全一致）
+                obs = np.concatenate([
+                    base_obs,                      # 54
+                    foot_contacts,                 # 4
+                    foot_forces_body / 50.0,       # 12 (归一化)
+                    base_height_normalized,        # 1
+                    history_flat,                  # N * 27
+                ], axis=-1)
+
+            else:
+                # 标准模式: 81维基础观测（含competition-specific）
+                obs = np.concatenate(
+                    [
+                        noisy_linvel,       # 3
+                        noisy_gyro,         # 3
+                        projected_gravity,  # 3
+                        noisy_joint_angle,  # 12
+                        noisy_joint_vel,    # 12
+                        last_actions,       # 12
+                        command_normalized, # 3
+                        position_error_normalized,  # 2
+                        heading_error_normalized[:, np.newaxis],  # 1
+                        distance_normalized[:, np.newaxis],  # 1
+                        reached_flag[:, np.newaxis],  # 1
+                        stop_ready_flag[:, np.newaxis],  # 1
+                        # Anti-reward-hacking observations
+                        base_height_normalized[:, np.newaxis],  # 1
+                        base_height_error[:, np.newaxis],  # 1
+                        foot_contacts,  # 4
+                        # Competition-specific observations
+                        smiley_relative_pos,  # 6
+                        hongbao_relative_pos,  # 6
+                        trigger_flags,  # 6
+                        finish_relative_pos,  # 2
+                        finish_flag,  # 1
+                    ],
+                    axis=-1,
+                )
+
+            assert obs.shape == (data.shape[0], self._obs_total_dim), \
+                f"Expected obs shape (*, {self._obs_total_dim}), got {obs.shape}"
 
         # Prevent NaN/Inf propagation
         obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
-        # Update target marker and arrows
-        self._update_target_marker(data, pose_commands)
-        base_lin_vel_xy = base_lin_vel[:, :2]
-        self._update_heading_arrows(data, root_pos, desired_vel_xy, base_lin_vel_xy)
-
-        # Update trigger states
-        self._update_trigger_states(root_pos, state.info)
-
-        # Compute rewards
-        reward = self._compute_reward(data, state.info, velocity_commands, root_pos, base_lin_vel)
-
-        # Compute termination
-        terminated_state = self._compute_terminated(state)
-        terminated = terminated_state.terminated
+        # 将中间量存入info，供 update_state 中的 reward/viz 使用
+        state.info["velocity_commands"] = velocity_commands
+        state.info["desired_vel_xy"] = desired_vel_xy
 
         state.obs = obs
-        state.reward = reward
-        state.terminated = terminated
-
-        return state
+        return state, root_pos, root_quat, base_lin_vel
 
     def _update_trigger_states(self, root_pos, info):
         """Update trigger states for smileys, hongbaos, and finish zone"""
@@ -778,219 +970,235 @@ class VBotSection011Env(NpEnv):
         
         return reward
 
-    def _compute_terminated(self, state: NpEnvState) -> NpEnvState:
-        """Compute termination conditions (strict version to prevent reward hacking)
-        
-        Termination triggers:
-        1. Base/torso contact with ground (existing)
-        2. Attitude failure: roll/pitch > 45° (existing, unchanged)
-        3. Out of bounds (existing, unchanged)
-        4. NEW: Base height too low (robot is lying/crouching on ground)
-        5. NEW: Thigh/calf contact with ground (illegal body contact)
-        
-        All terminations carry a heavy penalty from cfg (-200.0) to make
-        lying-down strategies completely non-viable.
+    def _compute_terminated(self, data: mtx.SceneData, info: dict,
+                            root_pos: np.ndarray, root_quat: np.ndarray,
+                            root_vel: np.ndarray) -> np.ndarray:
         """
-        data = state.data
+        终止条件（与section012完全一致）：
+        1. 基座接触地面（摔倒）
+        2. 姿态失控（roll/pitch > 45°）
+        3. 越界（超出赛道范围）
+        4. 高度过低（≤ 40%目标高度 = 坍塌/趴下）
+        5. 关节速度异常（overflow / NaN / Inf）
+
+        注意：episode超时由基类 _update_truncate 统一处理为 truncated。
+        """
         n_envs = data.shape[0]
-        
-        # Reduced grace period: 5 steps (was 20) — just enough for physics settling
-        GRACE_PERIOD = 5
-        steps = state.info.get("steps", np.zeros(n_envs, dtype=np.int32))
-        if isinstance(steps, np.ndarray):
-            in_grace_period = steps < GRACE_PERIOD
-        else:
-            in_grace_period = np.full(n_envs, steps < GRACE_PERIOD, dtype=bool)
-        
-        # 1. Base contact with ground (existing — torso touching ground)
-        try:
-            base_contact_value = self._model.get_sensor_value("base_contact", data)
-            if base_contact_value.ndim == 0:
-                base_contact = np.array([base_contact_value > 0.1], dtype=bool)
-            elif base_contact_value.shape[0] != n_envs:
-                base_contact = np.full(n_envs, base_contact_value.flatten()[0] > 0.1, dtype=bool)
-            else:
-                base_contact = (base_contact_value > 0.1).flatten()[:n_envs]
-        except Exception:
+        steps = info.get("steps", np.zeros(n_envs, dtype=np.int32))
+        in_grace = steps < GRACE_PERIOD_STEPS
+
+        # 1. 基座接触地面 — 仅在传感器可用时检测
+        if not self._base_contact_available:
             base_contact = np.zeros(n_envs, dtype=bool)
-        
-        # 2. Attitude failure (roll/pitch > 45 degrees)
-        try:
-            root_pos, root_quat, _ = self._extract_root_state(data)
-            qx, qy, qz, qw = root_quat[:, 0], root_quat[:, 1], root_quat[:, 2], root_quat[:, 3]
-            sinr_cosp = 2 * (qw * qx + qy * qz)
-            cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
-            roll = np.arctan2(sinr_cosp, cosr_cosp)
-            sinp = np.clip(2 * (qw * qy - qz * qx), -1.0, 1.0)
-            pitch = np.arcsin(sinp)
-            attitude_fail = (np.abs(roll) > self.fall_threshold_roll_pitch) | (np.abs(pitch) > self.fall_threshold_roll_pitch)
-        except Exception:
-            attitude_fail = np.zeros(n_envs, dtype=bool)
-            root_pos = np.zeros((n_envs, 3), dtype=np.float32)
-        
-        # 3. Out of bounds detection
+        else:
+          try:
+            base_contact_val = self._model.get_sensor_value(self._base_contact_sensor, data)
+            if base_contact_val.ndim == 0:
+                base_contact = np.full(n_envs, float(base_contact_val) > 0.01, dtype=bool)
+            elif base_contact_val.ndim == 1:
+                if base_contact_val.shape[0] == n_envs:
+                    base_contact = (base_contact_val > 0.01).astype(bool)
+                else:
+                    base_contact = np.full(n_envs,
+                        np.linalg.norm(base_contact_val) > 0.01, dtype=bool)
+            else:
+                base_contact = (np.linalg.norm(base_contact_val, axis=-1) > 0.01
+                                ).flatten()[:n_envs].astype(bool)
+          except Exception:
+            base_contact = np.zeros(n_envs, dtype=bool)
+
+        # 2. 姿态失控
+        roll, pitch = self._quat_to_roll_pitch(root_quat)
+        attitude_fail = (np.abs(roll) > FALL_THRESHOLD_ROLL_PITCH) | (np.abs(pitch) > FALL_THRESHOLD_ROLL_PITCH)
+
+        # 3. 越界检测
         out_of_bounds = (
             (root_pos[:, 0] < self.boundary_x_min) |
             (root_pos[:, 0] > self.boundary_x_max) |
             (root_pos[:, 1] < self.boundary_y_min) |
             (root_pos[:, 1] > self.boundary_y_max)
         )
-        
-        # 4. NEW: Base height too low (robot collapsed/lying on ground)
-        # If base height drops below 40% of target, it's definitely not standing
-        base_height = state.info.get("base_height", root_pos[:, 2])
-        height_too_low = base_height < (self.base_height_target * 0.4)  # < 0.2m means lying down
-        
-        # 5. NEW: Thigh/calf illegal contact detection
-        # Check foot contacts to infer body posture:
-        # If ALL 4 feet have no contact but base_height is very low, robot is lying on its body
-        foot_contacts = state.info.get("foot_contacts", np.zeros((n_envs, 4), dtype=np.float32))
-        no_foot_contact = np.sum(foot_contacts, axis=-1) == 0  # No feet touching ground
-        body_on_ground = no_foot_contact & (base_height < (self.base_height_target * 0.5))
-        
-        # Combine all termination conditions (ignore during grace period)
-        terminated = (base_contact | attitude_fail | out_of_bounds | height_too_low | body_on_ground) & ~in_grace_period
-        
-        # Apply HEAVY termination penalty from cfg (default: -200.0)
-        termination_penalty_scale = self._cfg.reward_config.scales.get("termination", -200.0)
-        penalty = np.where(terminated, termination_penalty_scale, 0.0)
-        state.reward += penalty
-        
-        # Log termination reasons
-        for env_id in np.where(terminated)[0]:
-            reasons = []
-            if base_contact[env_id]:
-                reasons.append("base_contact")
-            if attitude_fail[env_id]:
-                reasons.append("attitude_fail")
-            if out_of_bounds[env_id]:
-                reasons.append("out_of_bounds")
-            if height_too_low[env_id]:
-                reasons.append(f"height_too_low({base_height[env_id]:.3f}<{self.base_height_target*0.4:.3f})")
-            if body_on_ground[env_id]:
-                reasons.append("body_on_ground(no_feet+low_height)")
-            self._log(f"[TERM] ENV {env_id} terminated: {', '.join(reasons)}")
-        
-        state.terminated = terminated
-        return state
 
-    def _update_target_marker(self, data: mtx.SceneData, pose_commands):
-        """Update target marker position for visualization"""
-        n_envs = data.shape[0]
-        target_x = pose_commands[:, 0]
-        target_y = pose_commands[:, 1]
-        target_z = np.full(n_envs, 0.05, dtype=np.float32)  # Slight elevation for visibility
-        
-        for env_idx in range(n_envs):
-            data.dof_pos[env_idx, self._target_marker_dof_start:self._target_marker_dof_end] = [
-                target_x[env_idx], target_y[env_idx], target_z[env_idx]
+        # 4. 高度过低
+        height_too_low = root_pos[:, 2] < (self.base_height_target * MIN_STANDING_HEIGHT_RATIO)
+
+        # 5. 关节速度异常
+        dof_vel = self.get_dof_vel(data)
+        if dof_vel.ndim > 1:
+            vel_max = np.abs(dof_vel).max(axis=1)
+            vel_nan_inf = np.isnan(dof_vel).any(axis=1) | np.isinf(dof_vel).any(axis=1)
+        else:
+            vel_max = np.abs(dof_vel)
+            vel_nan_inf = np.isnan(dof_vel) | np.isinf(dof_vel)
+        vel_overflow = vel_max > 100.0
+
+        # 综合：物理终止条件在宽限期内不生效
+        physical_termination = (
+            base_contact | attitude_fail | out_of_bounds |
+            height_too_low | vel_overflow | vel_nan_inf
+        ) & ~in_grace
+
+        terminated = physical_termination
+
+        # 物理终止施加惩罚（通过info传递，由update_state叠加到reward）
+        info["termination_penalty"] = np.where(
+            physical_termination, TERMINATION_PENALTY, 0.0
+        ).astype(np.float32)
+
+        return terminated
+
+    # ==================== 可视化辅助 ====================
+
+    def _update_visualization(self, data: mtx.SceneData, root_pos: np.ndarray,
+                              root_vel: np.ndarray, info: dict):
+        """合并可视化更新，只调用一次 forward_kinematic（与section012一致）"""
+        num_envs = data.shape[0]
+        all_dof_pos = data.dof_pos.copy()
+
+        # ---- target marker ----
+        for env_idx in range(num_envs):
+            all_dof_pos[env_idx, self._target_marker_dof_start:self._target_marker_dof_end] = [
+                float(self.finish_zone_center[0]), float(self.finish_zone_center[1]), 0.0
             ]
 
-    def _update_heading_arrows(self, data: mtx.SceneData, root_pos, desired_vel_xy, base_lin_vel_xy):
-        """Update heading arrows for visualization"""
-        if self._robot_arrow_body is None or self._desired_arrow_body is None:
-            return
-        
-        n_envs = data.shape[0]
-        arrow_height = self._cfg.init_state.pos[2] + 0.5
-        
-        for env_idx in range(n_envs):
-            # Robot heading arrow (actual velocity direction)
-            actual_vel = base_lin_vel_xy[env_idx]
-            actual_speed = np.linalg.norm(actual_vel)
-            if actual_speed > 0.01:
-                actual_heading = np.arctan2(actual_vel[1], actual_vel[0])
-                robot_quat = self._euler_to_quat(0, 0, actual_heading)
-            else:
-                robot_quat = [0, 0, 0, 1]
-            
-            data.dof_pos[env_idx, self._robot_arrow_dof_start:self._robot_arrow_dof_end] = [
-                root_pos[env_idx, 0], root_pos[env_idx, 1], arrow_height,
-                robot_quat[0], robot_quat[1], robot_quat[2], robot_quat[3]
-            ]
-            
-            # Desired heading arrow (desired velocity direction)
-            desired_vel = desired_vel_xy[env_idx]
-            desired_speed = np.linalg.norm(desired_vel)
-            if desired_speed > 0.01:
-                desired_heading = np.arctan2(desired_vel[1], desired_vel[0])
-                desired_quat = self._euler_to_quat(0, 0, desired_heading)
-            else:
-                desired_quat = [0, 0, 0, 1]
-            
-            data.dof_pos[env_idx, self._desired_arrow_dof_start:self._desired_arrow_dof_end] = [
-                root_pos[env_idx, 0], root_pos[env_idx, 1], arrow_height,
-                desired_quat[0], desired_quat[1], desired_quat[2], desired_quat[3]
-            ]
+        # ---- heading arrows ----
+        if self._robot_arrow_body is not None and self._desired_arrow_body is not None:
+            desired_vel_xy = info.get("desired_vel_xy", np.zeros((num_envs, 2), dtype=np.float32))
+            base_lin_vel_xy = root_vel[:, :2]
+            arrow_offset = 0.5
+
+            for env_idx in range(num_envs):
+                arrow_height = root_pos[env_idx, 2] + arrow_offset
+
+                # 当前运动方向箭头
+                cur_v = base_lin_vel_xy[env_idx]
+                cur_yaw = np.arctan2(cur_v[1], cur_v[0]) if np.linalg.norm(cur_v) > 1e-3 else 0.0
+                robot_arrow_quat = self._euler_to_quat(0, 0, cur_yaw)
+                qn = np.linalg.norm(robot_arrow_quat)
+                robot_arrow_quat = robot_arrow_quat / qn if qn > 1e-6 else np.array([0, 0, 0, 1], dtype=np.float32)
+                all_dof_pos[env_idx, self._robot_arrow_dof_start:self._robot_arrow_dof_end] = np.concatenate([
+                    np.array([root_pos[env_idx, 0], root_pos[env_idx, 1], arrow_height], dtype=np.float32),
+                    robot_arrow_quat
+                ])
+
+                # 期望运动方向箭头
+                des_v = desired_vel_xy[env_idx]
+                des_yaw = np.arctan2(des_v[1], des_v[0]) if np.linalg.norm(des_v) > 1e-3 else 0.0
+                desired_arrow_quat = self._euler_to_quat(0, 0, des_yaw)
+                qn = np.linalg.norm(desired_arrow_quat)
+                desired_arrow_quat = desired_arrow_quat / qn if qn > 1e-6 else np.array([0, 0, 0, 1], dtype=np.float32)
+                all_dof_pos[env_idx, self._desired_arrow_dof_start:self._desired_arrow_dof_end] = np.concatenate([
+                    np.array([root_pos[env_idx, 0], root_pos[env_idx, 1], arrow_height], dtype=np.float32),
+                    desired_arrow_quat
+                ])
+
+        # 一次性写入 + forward_kinematic
+        data.set_dof_pos(all_dof_pos, self._model)
+        self._model.forward_kinematic(data)
 
     def _euler_to_quat(self, roll, pitch, yaw):
-        """Convert Euler angles to quaternion (x, y, z, w)"""
+        """欧拉角 → 四元数 [qx, qy, qz, qw]"""
         cy = np.cos(yaw * 0.5)
         sy = np.sin(yaw * 0.5)
         cp = np.cos(pitch * 0.5)
         sp = np.sin(pitch * 0.5)
         cr = np.cos(roll * 0.5)
         sr = np.sin(roll * 0.5)
-        
         qw = cr * cp * cy + sr * sp * sy
         qx = sr * cp * cy - cr * sp * sy
         qy = cr * sp * cy + sr * cp * sy
         qz = cr * cp * sy - sr * sp * cy
-        
-        return [qx, qy, qz, qw]
+        return np.array([qx, qy, qz, qw], dtype=np.float32)
 
     def reset(
         self,
         data: mtx.SceneData,
         done: np.ndarray = None,
     ) -> tuple[np.ndarray, dict]:
-        """Reset the environment"""
-        cfg = self._cfg
-        n_envs = data.shape[0]
-        
-        # Random spawn in START zone
-        # Use uniform random distribution within circle
-        angles = np.random.uniform(0, 2*np.pi, n_envs)
-        radii = self.start_zone_radius * np.sqrt(np.random.uniform(0, 1, n_envs))
-        spawn_x = self.start_zone_center[0] + radii * np.cos(angles)
-        spawn_y = self.start_zone_center[1] + radii * np.sin(angles)
-        spawn_z = cfg.init_state.pos[2]
-        
-        # Random yaw orientation
-        spawn_yaw = np.random.uniform(-np.pi, np.pi, n_envs)
-        spawn_quat = np.array([self._euler_to_quat(0, 0, yaw) for yaw in spawn_yaw])
-        
-        # Validate quaternions
-        quat_norms = np.linalg.norm(spawn_quat, axis=-1)
-        invalid_quat = (quat_norms < 0.9) | (quat_norms > 1.1)
-        if np.any(invalid_quat):
-            spawn_quat[invalid_quat] = np.array([0, 0, 0, 1])
-        else:
-            spawn_quat = spawn_quat / quat_norms[:, np.newaxis]
-        
-        dof_pos = np.tile(self._init_dof_pos, (n_envs, 1))
-        dof_vel = np.tile(self._init_dof_vel, (n_envs, 1))
+        """重置环境
 
-        # Set base position and orientation
-        dof_pos[:, 3:6] = np.column_stack([spawn_x, spawn_y, np.full(n_envs, spawn_z, dtype=np.float32)])
+        当 done 不为 None 时，仅重置 done=True 的环境（部分重置）。
+        当基类 _reset_done_envs 调用时 data 已切片，done=None，全量重置即可。
+        """
+        cfg = self._cfg
+        num_envs = data.shape[0]
+
+        # ===== 部分重置支持（与section012一致）=====
+        if done is not None:
+            reset_mask = done.astype(bool)
+            if not np.any(reset_mask):
+                # 无需重置，直接返回当前观测
+                obs = np.zeros((num_envs, self.observation_space.shape[0]), dtype=np.float32)
+                info = {
+                    "current_actions": np.zeros((num_envs, self._num_action), dtype=np.float32),
+                }
+                return obs, info
+            reset_indices = np.where(reset_mask)[0]
+            num_reset = len(reset_indices)
+        else:
+            reset_indices = np.arange(num_envs)
+            num_reset = num_envs
+
+        # ===== 在 START zone 随机生成位置（X轴随机，Y固定）=====
+        spawn_x = np.random.uniform(-4.0, 4.0, num_reset)  # 留1m边距，避免平台边缘出生
+        spawn_y = np.full(num_reset, self.start_zone_center[1], dtype=np.float32)
+        spawn_z = cfg.init_state.pos[2]
+
+        # 初始朝向：面向+Y方向（朝终点），小范围随机 ±30°
+        spawn_yaw = np.random.uniform(np.pi / 2 - np.pi / 6, np.pi / 2 + np.pi / 6, num_reset)
+        spawn_quat = np.array([self._euler_to_quat(0, 0, yaw) for yaw in spawn_yaw])
+
+        dof_pos = np.tile(self._init_dof_pos, (num_reset, 1))
+        dof_vel = np.tile(self._init_dof_vel, (num_reset, 1))
+
+        # 使用命名索引设置基座位姿
+        dof_pos[:, self._base_pos_start:self._base_pos_end] = np.column_stack(
+            [spawn_x, spawn_y, np.full(num_reset, spawn_z, dtype=np.float32)]
+        )
         dof_pos[:, self._base_quat_start:self._base_quat_end] = spawn_quat
 
-        # Normalize base quaternions
-        for env_idx in range(n_envs):
+        # 归一化所有四元数
+        for env_idx in range(num_reset):
+            # 基座四元数
             quat = dof_pos[env_idx, self._base_quat_start:self._base_quat_end]
-            quat_norm = np.linalg.norm(quat)
-            if quat_norm > 1e-6:
-                dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = quat / quat_norm
-            else:
-                dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+            qn = np.linalg.norm(quat)
+            dof_pos[env_idx, self._base_quat_start:self._base_quat_end] = (
+                quat / qn if qn > 1e-6 else np.array([0, 0, 0, 1], dtype=np.float32)
+            )
 
-        data.reset(self._model)
-        data.set_dof_vel(dof_vel)
-        data.set_dof_pos(dof_pos, self._model)
+            # 箭头四元数（与section012一致）
+            if self._robot_arrow_body is not None:
+                for start, end in [
+                    (self._robot_arrow_dof_start + 3, self._robot_arrow_dof_end),
+                    (self._desired_arrow_dof_start + 3, self._desired_arrow_dof_end),
+                ]:
+                    if end <= len(dof_pos[env_idx]):
+                        aq = dof_pos[env_idx, start:end]
+                        aqn = np.linalg.norm(aq)
+                        dof_pos[env_idx, start:end] = (
+                            aq / aqn if aqn > 1e-6 else np.array([0, 0, 0, 1], dtype=np.float32)
+                        )
+
+        # ===== 写入物理状态（支持部分重置）=====
+        if done is not None:
+            # 仅重置子集 — 保留非 done 环境的 dof_pos 和 dof_vel
+            all_dof_pos = data.dof_pos.copy()
+            all_dof_vel = data.dof_vel.copy() if hasattr(data, 'dof_vel') else np.zeros_like(all_dof_pos)
+            for local_i, global_i in enumerate(reset_indices):
+                all_dof_pos[global_i] = dof_pos[local_i]
+                all_dof_vel[global_i] = self._init_dof_vel
+            data.reset(self._model)
+            data.set_dof_vel(all_dof_vel)
+            data.set_dof_pos(all_dof_pos, self._model)
+        else:
+            data.reset(self._model)
+            data.set_dof_vel(dof_vel)
+            data.set_dof_pos(dof_pos, self._model)
+
         self._model.forward_kinematic(data)
-        
-        # Reset trigger flags (only when mapping is known)
-        if done is None and n_envs == self._num_envs:
+
+        # 重置触发标志
+        if done is None and num_envs == self._num_envs:
             self.smiley_triggered.fill(False)
             self.hongbao_triggered.fill(False)
             self.finish_triggered.fill(False)
@@ -1002,58 +1210,100 @@ class VBotSection011Env(NpEnv):
             self.finish_triggered[done] = False
             self.celebration_start_time[done] = -1.0
             self.celebration_completed[done] = False
-        
-        # Initialize info dict
+
+        # ===== 构建初始信息（补全缺失的 key，与section012一致）=====
         info = {
-            "current_actions": np.zeros((n_envs, self._num_action), dtype=np.float32),
-            "steps": np.zeros(n_envs, dtype=np.int32),
-            "last_waypoint_distance": np.full(n_envs, self.DEFAULT_WAYPOINT_DISTANCE, dtype=np.float32),
-            "time_elapsed": np.zeros(n_envs, dtype=np.float32),  # Store as array for consistency
-            "smiley_triggered": np.zeros((n_envs, 3), dtype=bool),
-            "hongbao_triggered": np.zeros((n_envs, 3), dtype=bool),
-            "finish_triggered": np.zeros(n_envs, dtype=bool),
-            "celebration_start_time": np.full(n_envs, -1.0, dtype=np.float32),
-            "celebration_completed": np.zeros(n_envs, dtype=bool),
-            "celebration_rewarded": np.zeros(n_envs, dtype=bool),
-            "finish_rewarded": np.zeros(n_envs, dtype=bool),
-            "smiley_0_rewarded": np.zeros(n_envs, dtype=bool),
-            "smiley_1_rewarded": np.zeros(n_envs, dtype=bool),
-            "smiley_2_rewarded": np.zeros(n_envs, dtype=bool),
-            "hongbao_0_rewarded": np.zeros(n_envs, dtype=bool),
-            "hongbao_1_rewarded": np.zeros(n_envs, dtype=bool),
-            "hongbao_2_rewarded": np.zeros(n_envs, dtype=bool),
+            # 动作
+            "last_actions": np.zeros((num_envs, self._num_action), dtype=np.float32),
+            "current_actions": np.zeros((num_envs, self._num_action), dtype=np.float32),
+            "filtered_actions": np.zeros((num_envs, self._num_action), dtype=np.float32),
+            # 计步与计时
+            "steps": np.zeros(num_envs, dtype=np.int32),
+            "time_elapsed": np.zeros(num_envs, dtype=np.float32),
+            "last_waypoint_distance": np.full(num_envs, self.DEFAULT_WAYPOINT_DISTANCE, dtype=np.float32),
+            # 物理
+            "last_dof_vel": np.zeros((num_envs, self._num_action), dtype=np.float32),
+            # 竞赛触发状态
+            "smiley_triggered": np.zeros((num_envs, 3), dtype=bool),
+            "hongbao_triggered": np.zeros((num_envs, 3), dtype=bool),
+            "finish_triggered": np.zeros(num_envs, dtype=bool),
+            "celebration_start_time": np.full(num_envs, -1.0, dtype=np.float32),
+            "celebration_completed": np.zeros(num_envs, dtype=bool),
+            "celebration_rewarded": np.zeros(num_envs, dtype=bool),
+            "finish_rewarded": np.zeros(num_envs, dtype=bool),
+            "smiley_0_rewarded": np.zeros(num_envs, dtype=bool),
+            "smiley_1_rewarded": np.zeros(num_envs, dtype=bool),
+            "smiley_2_rewarded": np.zeros(num_envs, dtype=bool),
+            "hongbao_0_rewarded": np.zeros(num_envs, dtype=bool),
+            "hongbao_1_rewarded": np.zeros(num_envs, dtype=bool),
+            "hongbao_2_rewarded": np.zeros(num_envs, dtype=bool),
         }
+
+        # 崎岖地形额外缓冲区
+        if self._rough_terrain:
+            info["feet_air_time"] = np.zeros((num_envs, self._num_feet), dtype=np.float32)
+            info["first_contact_air_time"] = np.zeros((num_envs, self._num_feet), dtype=np.float32)
+            info["foot_contacts"] = np.zeros((num_envs, self._num_feet), dtype=np.float32)
+            info["foot_forces_body"] = np.zeros((num_envs, 12), dtype=np.float32)
+            info["state_history"] = None  # 将在 _compute_observation 中首次填充
+
         if done is not None:
             info["env_ids"] = np.where(done)[0]
-        
-        obs = np.zeros((n_envs, self.observation_space.shape[0]), dtype=np.float32)
-        reward = np.zeros((n_envs,), dtype=np.float32)
-        terminated = np.zeros((n_envs,), dtype=bool)
-        truncated = np.zeros((n_envs,), dtype=bool)
+
+        obs = np.zeros((num_envs, self.observation_space.shape[0]), dtype=np.float32)
+        reward = np.zeros((num_envs,), dtype=np.float32)
+        terminated = np.zeros((num_envs,), dtype=bool)
+        truncated = np.zeros((num_envs,), dtype=bool)
         state = NpEnvState(data=data, obs=obs, reward=reward, terminated=terminated, truncated=truncated, info=info)
 
-        # Compute initial observation
-        state = self._compute_observation(data, state)
+        # 计算初始观测
+        state, root_pos, root_quat, root_vel = self._compute_observation(data, state)
 
-        # Prevent NaN/Inf
+        # 防止 NaN/Inf
         state.obs = np.nan_to_num(state.obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-        
-        self._log(f"[RESET] Spawned {n_envs} robots at START zone (x={spawn_x}, y={spawn_y})")
-        
+
+        # 可视化更新（与section012一致：reset末尾也调用一次）
+        self._update_visualization(data, root_pos, root_vel, state.info)
+
+        self._log(f"[RESET] Spawned {num_reset} robots at START zone")
+
         return state.obs, state.info
 
     def update_state(self, state: NpEnvState) -> NpEnvState:
-        """Update environment state"""
+        """更新环境状态（观测、奖励、终止）— 与section012结构一致"""
         data = state.data
+        info = state.info
 
-        # Compute observation and rewards
-        state = self._compute_observation(data, state)
-        
-        # Update time elapsed (approximate, assuming constant dt)
-        current_time = state.info.get("time_elapsed", np.zeros(data.shape[0], dtype=np.float32))
-        if isinstance(current_time, (int, float)):
-            current_time = np.full(data.shape[0], current_time, dtype=np.float32)
-        state.info["time_elapsed"] = current_time + self._cfg.sim_dt
-        
+        # 1. 计算观测（纯观测计算，不包含奖励/终止/可视化）
+        state, root_pos, root_quat, root_vel = self._compute_observation(data, state)
+
+        # 2. 更新触发状态（smileys, hongbaos, finish）
+        self._update_trigger_states(root_pos, info)
+
+        # 3. 计算奖励
+        velocity_commands = info.get("velocity_commands",
+                                     np.zeros((data.shape[0], 3), dtype=np.float32))
+        reward = self._compute_reward(data, info, velocity_commands, root_pos, root_vel)
+
+        # 4. 计算终止条件
+        terminated = self._compute_terminated(data, info, root_pos, root_quat, root_vel)
+
+        # 5. 将终止惩罚叠加到奖励中（与section012一致）
+        termination_penalty = info.get("termination_penalty",
+                                        np.zeros(data.shape[0], dtype=np.float32))
+        reward = reward + termination_penalty
+
+        # 6. 更新时间
+        info["time_elapsed"] = info.get(
+            "time_elapsed", np.zeros(data.shape[0], dtype=np.float32)
+        ) + self._cfg.sim_dt
+
+        # 7. 可视化更新放到最后（与section012一致）
+        info["desired_vel_xy"] = info.get("desired_vel_xy",
+                                           np.zeros((data.shape[0], 2), dtype=np.float32))
+        self._update_visualization(data, root_pos, root_vel, info)
+
+        state.reward = reward
+        state.terminated = terminated
         return state
 
