@@ -11,9 +11,9 @@ from .cfg import VBotSection013EnvCfg
 
 # ==================== 竞赛场景常量 ====================
 
-# 终点平台（"中国结"）- 视觉模型中心 (0, 32.3)
-FINISH_ZONE_CENTER = np.array([0.0, 32.3], dtype=np.float32)
-FINISH_ZONE_RADIUS = 1.5  # 终点判定半径（m），身体任何部位进入即算到达
+# 终点平台（"中国结"）- 视觉模型中心 (0, 33.3)
+FINISH_ZONE_CENTER = np.array([0.0, 33.3], dtype=np.float32)
+FINISH_ZONE_RADIUS = 1.0 # 终点判定半径（m），身体任何部位进入即算到达
 
 # Y轴方向检查点（递增排列，用于RL稠密奖励塑形）
 CHECKPOINTS_Y = np.array([27.5, 29.0, 30.5, 32.0], dtype=np.float32)
@@ -304,11 +304,36 @@ class VBotSection013Env(NpEnv):
         return self._action_space
     
     def apply_action(self, actions: np.ndarray, state: NpEnvState):
+        """应用动作：带低通滤波的PD力矩控制
+
+        到达终点后自动注入庆祝动作序列（交替抬腿+身体摇摆），
+        确保产生"优雅且明显"的庆祝表现。
+        """
         # 保存上一步的关节速度（用于计算加速度）
         state.info["last_dof_vel"] = self.get_dof_vel(state.data)
         
         state.info["last_actions"] = state.info["current_actions"]
-        
+
+        # === 庆祝模式: 到达终点后注入预设庆祝动作 ===
+        finish_triggered = state.info.get("finish_reached",
+                                          np.zeros(state.data.shape[0], dtype=bool))
+        celebration_completed = state.info.get("celebration_completed",
+                                               np.zeros(state.data.shape[0], dtype=bool))
+        celebration_start_time = state.info.get("celebration_start_time",
+                                                np.full(state.data.shape[0], -1.0, dtype=np.float32))
+        time_elapsed = state.info.get("time_elapsed",
+                                      np.zeros(state.data.shape[0], dtype=np.float32))
+        if isinstance(time_elapsed, (int, float)):
+            time_elapsed = np.full(state.data.shape[0], time_elapsed, dtype=np.float32)
+
+        actions = actions.copy()  # 避免修改原始数组
+        for env_id in range(state.data.shape[0]):
+            if (finish_triggered[env_id]
+                    and not celebration_completed[env_id]
+                    and celebration_start_time[env_id] >= 0):
+                t = float(time_elapsed[env_id] - celebration_start_time[env_id])
+                actions[env_id] = self._generate_celebration_actions(t)
+
         if "filtered_actions" not in state.info:
             state.info["filtered_actions"] = actions
         else:
@@ -923,6 +948,39 @@ class VBotSection013Env(NpEnv):
         # NaN保护
         reward = np.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=-10.0)
         return reward
+
+    def _generate_celebration_actions(self, t: float) -> np.ndarray:
+        """生成庆祝动作序列 — 交替抬腿 + 身体摇摆 + 小跳
+
+        关节映射:
+          0:FR_hip  1:FR_thigh  2:FR_calf
+          3:FL_hip  4:FL_thigh  5:FL_calf
+          6:RR_hip  7:RR_thigh  8:RR_calf
+          9:RL_hip 10:RL_thigh 11:RL_calf
+
+        动作范围 [-1, 1]，经 action_scale(0.25) 缩放后加到默认角度上。
+        振幅 0.8 → 实际关节偏移 0.2 rad ≈ 11.5°，肉眼可见。
+        """
+        actions = np.zeros(12, dtype=np.float32)
+        freq = 3.0  # 基频 3 Hz — 快速但不过激
+
+        # ---- 前腿交替抬起（最显眼的庆祝动作）----
+        actions[1] = 0.8 * np.sin(2 * np.pi * freq * t)              # FR thigh
+        actions[4] = 0.8 * np.sin(2 * np.pi * freq * t + np.pi)     # FL thigh（反相）
+        actions[2] = -0.6 * np.sin(2 * np.pi * freq * t)            # FR calf 跟随
+        actions[5] = -0.6 * np.sin(2 * np.pi * freq * t + np.pi)    # FL calf 跟随
+
+        # ---- 髋关节左右摇摆（低频，营造"扭动"感）----
+        actions[0] = 0.5 * np.sin(2 * np.pi * 1.5 * t)              # FR hip
+        actions[3] = 0.5 * np.sin(2 * np.pi * 1.5 * t)              # FL hip
+        actions[6] = -0.3 * np.sin(2 * np.pi * 1.5 * t)             # RR hip
+        actions[9] = -0.3 * np.sin(2 * np.pi * 1.5 * t)             # RL hip
+
+        # ---- 后腿轻微弹跳（双倍频，增加活泼感）----
+        actions[7] = 0.3 * np.sin(2 * np.pi * freq * 2 * t)         # RR thigh
+        actions[10] = 0.3 * np.sin(2 * np.pi * freq * 2 * t)        # RL thigh
+
+        return actions
 
     def reset(self, data: mtx.SceneData, done: np.ndarray = None) -> tuple[np.ndarray, dict]:
         """

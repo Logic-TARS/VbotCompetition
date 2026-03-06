@@ -240,7 +240,7 @@ class VBotSection02EnvCfg(VBotStairsEnvCfg):
         # 起始位置：section02的起始位置（继承自locomotion）
         # pos = [-2.5, 8.5, 1.8]
         # pos = [-2.5, 8.5, 1.8]
-        pos = [-2.5, 12.0, 1.8]  # Y坐标对应section02的起点，高度1.8m
+        pos = [-2.5, 10.0, 1.8]  # Y坐标对应section02的起点，高度1.8m
         # pos = [-2.5, 15.0, 3.3]  # Y坐标对应section02的起点，高度1.8m
         # pos = [-2.5, 21.0, 3.3]  # Y坐标对应section02的起点，高度1.8m
         # pos = [-2.5, 24.6, 1.8]  # Y坐标对应section02的起点，高度1.8m
@@ -411,8 +411,10 @@ class VBotSection001EnvCfg(VBotStairsEnvCfg):
     control_config: ControlConfig = field(default_factory=ControlConfig)
 
     # 竞赛场地参数
-    min_spawn_distance: float = 2.0   # 出生点距目标(圆心)的最小距离(m) — 从8.0降低，便于探索
-    boundary_radius: float = 10.0      # 竞赛场地边界半径(m)
+    outer_fence_radius: float = 10.0  # 最外围蓝色电子围栏半径(m)
+    min_spawn_distance: float = 10.2  # 出生点距圆心最小距离(m) — 在外围蓝色电子围栏外
+    max_spawn_radius: float = 12.0    # 出生点距圆心最大距离(m) — 碰撞地面半径12.5m内
+    boundary_radius: float = 13.0     # 越界判定半径(m) — 大于碰撞地面12.5m
     arena_center: list = field(default_factory=lambda: [0.0, 0.0])  # 圆心坐标
 
 @dataclass
@@ -439,8 +441,8 @@ class CompetitionConfig:
     hongbao_radius: float = 1.0  # 增大触发半径，崎岖地形更容易触发
     
     # 终点区域 — 2026平台中心 (碰撞体 Adiban_004 的中心Y=7.83, 表面Z≈1.294)
-    finish_zone_center: list = field(default_factory=lambda: [0.0, 7.83])
-    finish_zone_radius: float = 1.0
+    finish_zone_center: list = field(default_factory=lambda: [0.0, 7.95])
+    finish_zone_radius: float = 0.5
     
     # 边界限制
     boundary_x_min: float = -20.0
@@ -557,10 +559,10 @@ class VBotSection012EnvCfg(VBotStairsEnvCfg):
         # XML中平台碰撞体: pos="0.0 7.83 1.044" size="5.0 1.0 0.25"
         # 表面Z = 1.044 + 0.25 = 1.294, 机器人站立高度0.462 → 出生Z = 1.756
         # 平台Y范围: [6.83, 8.83]（一票否决项：必须从"2026"平台出发）
-        pos = [0.0, 7.83, 1.756]
+        pos = [0.0, 7.3, 1.756]
         # 位置随机化范围 [x_min, y_min, x_max, y_max]，相对于pos中心的偏移
-        # 平台X: [-5,5] → 偏移±4.0, 平台Y: [6.83,8.83] → 偏移±1.0
-        pos_randomization_range = [-4.0, -1.0, 4.0, 1.0]
+        # 平台X: [-5,5] → 偏移±3.0, 平台Y: [6.83,8.83] → 偏移±0.0
+        pos_randomization_range = [-3.0, -0.0, 3.0, 0.0]
 
         default_joint_angles = {
             "FR_hip_joint": -0.0,

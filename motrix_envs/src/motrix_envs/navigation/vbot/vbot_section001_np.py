@@ -931,20 +931,16 @@ class VBotSection001Env(NpEnv):
         cfg: VBotSection001EnvCfg = self._cfg
         num_envs = data.shape[0]
 
-        # ===== 极坐标随机生成在整个平台范围内 =====
-        # 使用sqrt保证面积均匀分布，确保与目标(圆心)最小距离由配置决定
-        min_spawn_distance = cfg.min_spawn_distance  # 至少距目标(圆心)设定距离(默认2.0m)
-        max_spawn_radius = cfg.boundary_radius - 0.5  # 3.0m，留足安全距离防止出生在地面外
+        # ===== 极坐标随机生成在最外围蓝色电子围栏外 =====
+        # 在环形区域 [min_spawn_distance, max_spawn_radius] 内均匀采样
+        r_min = getattr(cfg, 'min_spawn_distance', 10.2)   # 外围蓝色围栏外侧
+        r_max = getattr(cfg, 'max_spawn_radius', 12.0)     # 碰撞地面内（12.5m）
         robot_init_xy = np.zeros((num_envs, 2), dtype=np.float32)
         for i in range(num_envs):
-            while True:
-                theta = np.random.uniform(0, 2 * np.pi)
-                radius = max_spawn_radius * np.sqrt(np.random.uniform(0, 1))
-                x = radius * np.cos(theta)
-                y = radius * np.sin(theta)
-                if np.sqrt(x**2 + y**2) >= min_spawn_distance:
-                    robot_init_xy[i] = [x, y]
-                    break
+            theta = np.random.uniform(0, 2 * np.pi)
+            # sqrt 保证环形区域面积均匀分布
+            radius = np.sqrt(np.random.uniform(r_min**2, r_max**2))
+            robot_init_xy[i] = [radius * np.cos(theta), radius * np.sin(theta)]
 
         # 添加圆心偏移（如果存在）
         robot_init_xy += np.array(cfg.arena_center, dtype=np.float32)
