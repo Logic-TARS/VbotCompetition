@@ -11,10 +11,9 @@ from .cfg import VBotSection012EnvCfg
 
 # ==================== 竞赛场景常量 ====================
 
-# 终点平台（"丙午大吉"）- 中心 (0, 23.33)，范围 Y: 22.33~24.33，X: -5~5
-FINISH_ZONE_CENTER = np.array([0.0, 23.33], dtype=np.float32)
-FINISH_ZONE_RADIUS = 1.0  # 终点判定半径（m）
-FINISH_ZONE_X_RANGE = (-3.5, 3.5)  # 终点X轴随机范围（保证圆心+半径不超出平台）
+# 终点平台（"丙午大吉"）- 中心 Y=23.33，分路线设置
+FINISH_ZONE_Y = 23.33   
+FINISH_ZONE_RADIUS = 1.0 # 终点判定半径（m）
 
 # ==================== 简化路径点序列 ====================
 # 只保留 1 个中间检查点 + 终点 = 2 个路径点
@@ -23,7 +22,7 @@ WAYPOINT_ADVANCE_BONUS = 3.0
 WAYPOINT_DIST_REDUCTION_SCALE = 1.0
 
 # 吊桥路线 X 范围（桥宽）
-BRIDGE_X_CENTER = -2.5
+BRIDGE_X_CENTER = -2.7
 BRIDGE_X_HALF_WIDTH = 0.5
 
 # 河床路线 X 范围
@@ -34,7 +33,11 @@ RIVERBED_X_HALF_WIDTH = 1
 _WAYPOINT_MID = np.array([BRIDGE_X_CENTER, 17.82], dtype=np.float32)
 # 河床侧中间检查点X随机偏移范围
 WAYPOINT_MID_X_RANDOM = 0.3  # 河床路线在中心左右随机±0.3m
-# 终点由 FINISH_ZONE_CENTER 在 reset 中动态填充
+
+# 终点：与中间检查点逻辑一致——吊桥固定中心，河床侧±0.3m随机偏移
+_FINISH_BRIDGE = np.array([BRIDGE_X_CENTER, FINISH_ZONE_Y], dtype=np.float32)
+_FINISH_RIVERBED = np.array([RIVERBED_X_CENTER, FINISH_ZONE_Y], dtype=np.float32)
+FINISH_X_RANDOM = 0.3  # 河床路线终点X随机偏移
 
 NUM_WAYPOINTS_TOTAL = 2  # WP0: 中间检查点, WP1: 终点
 
@@ -114,9 +117,13 @@ PROGRESS_SCALE = 4.0           # Fix #16: 2.0→4.0，增强Y坐标进度奖励
 VEL_TRACKING_SIGMA = 2.0      # Fix #17: 0.25→2.0，拓宽高斯核吸引盆，让v≈0时也有梯度
 
 # 地形自适应速度控制
-DOWNHILL_SPEED_FACTOR = 0.4    # 下坡时目标速度降至 40%（防止下楼梯跌倒）
+DOWNHILL_SPEED_FACTOR = 0.2    # 下坡时目标速度降至 20%（防止下楼梯冲太快刹不住）
 UPHILL_SPEED_FACTOR = 0.7      # 上坡时目标速度降至 70%（减少卡住时的惩罚）
 STUCK_PENALTY_SCALE = 1.5      # 卡住惩罚系数（有命令但不动=卡住）
+
+# 刹车区参数：接近终点时渐进降速
+BRAKING_ZONE_DIST = 3.0        # 距终点多远开始刹车（m）
+OVERSPEED_PENALTY = 2.0        # 到达终点后超速惩罚系数
 
 
 # Fix #11: 删除未使用的 generate_repeating_array 死代码
@@ -434,28 +441,8 @@ class VBotSection012Env(NpEnv):
         state.info["last_dof_vel"] = self.get_dof_vel(state.data)
         state.info["last_actions"] = state.info["current_actions"]
 
-        # === 庆祝模式: 到达终点后注入预设庆祝动作 ===
-        finish_triggered = state.info.get("finish_reached",
-                                          np.zeros(state.data.shape[0], dtype=bool))
-        celebration_completed = state.info.get("celebration_completed",
-                                               np.zeros(state.data.shape[0], dtype=bool))
-        celebration_start_time = state.info.get("celebration_start_time",
-                                                np.full(state.data.shape[0], -1.0, dtype=np.float32))
-        time_elapsed = state.info.get("time_elapsed",
-                                      np.zeros(state.data.shape[0], dtype=np.float32))
-        if isinstance(time_elapsed, (int, float)):
-            time_elapsed = np.full(state.data.shape[0], time_elapsed, dtype=np.float32)
-
-        actions = actions.copy()  # 避免修改原始数组
-        for env_id in range(state.data.shape[0]):
-            if (finish_triggered[env_id]
-                    and not celebration_completed[env_id]
-                    and celebration_start_time[env_id] >= 0):
-                t = float(time_elapsed[env_id] - celebration_start_time[env_id])
-                actions[env_id] = self._generate_celebration_actions(t)
-
         if "filtered_actions" not in state.info:
-            state.info["filtered_actions"] = actions
+            state.info["filtered_actions"] = actions.copy()
         else:
             state.info["filtered_actions"] = (
                 self.action_filter_alpha * actions
@@ -757,6 +744,17 @@ class VBotSection012Env(NpEnv):
         newly_finished = (finish_dist < FINISH_ZONE_RADIUS) & ~finish_reached
         finish_reached |= newly_finished
 
+        # DEBUG: 打印终点触发信息
+        for i in range(n_envs):
+            if newly_finished[i]:
+                print(f"[DEBUG] ENV {i} reached finish! "
+                      f"pos=({robot_xy[i,0]:.2f}, {robot_xy[i,1]:.2f}), "
+                      f"Z={root_pos[i,2]:.3f}, "
+                      f"finish_center=({finish_zone_center[i,0]:.2f}, {finish_zone_center[i,1]:.2f}), "
+                      f"dist={finish_dist[i]:.3f}, "
+                      f"height_target={self.base_height_target:.3f}, "
+                      f"height_thresh={self.base_height_target * MIN_STANDING_HEIGHT_RATIO:.3f}")
+
         # 庆祝计时开始
         time_elapsed = info.get("time_elapsed", np.zeros(n_envs, dtype=np.float32))
         celebration_start = info["celebration_start_time"]
@@ -901,9 +899,16 @@ class VBotSection012Env(NpEnv):
         roll_now, pitch_now = self._quat_to_roll_pitch(root_quat)
 
         # 基础目标速度：未到终点1.0 m/s，到达终点0
-        base_target_vel = np.where(
-            info.get("reached_finish", np.zeros(n_envs, dtype=bool)), 0.0, 1.0
-        )
+        # 使用持久标志 finish_reached（一旦进入终点区域就永久置True），
+        # 而非瞬时 reached_finish（离开区域后会变回False）
+        has_finished = info.get("finish_reached", np.zeros(n_envs, dtype=bool))
+
+        # 刹车区：距终点 < BRAKING_ZONE_DIST 时线性降速
+        finish_zone_center_r = info["finish_zone_center"]
+        dist_to_finish_r = np.linalg.norm(robot_xy - finish_zone_center_r, axis=-1)
+        braking_ratio = np.clip(dist_to_finish_r / BRAKING_ZONE_DIST, 0.0, 1.0)  # 0=到终点, 1=远离
+        base_target_vel = np.where(has_finished, 0.0, 1.0 * braking_ratio)
+
         # 下坡自适应：pitch < -0.1rad(≈-6°) 时线性降速
         downhill_mask = pitch_now < -0.1
         # 上坡自适应：pitch > 0.1rad(≈6°) 时适度降速
@@ -914,34 +919,39 @@ class VBotSection012Env(NpEnv):
 
         vel_tracking_reward = np.exp(-np.square(target_vel_y - forward_vel_y) / VEL_TRACKING_SIGMA)
         reward += FORWARD_VEL_SCALE * vel_tracking_reward * standing_mask
-        # 正向速度线性奖励（降低上限防止冲刺）
-        reward += 1.0 * np.clip(forward_vel_y, -0.1, 1.0) * standing_mask
+        # 正向速度线性奖励（降低上限防止冲刺）— 到达终点后关闭
+        not_finished = (~has_finished).astype(np.float32)
+        reward += 1.0 * np.clip(forward_vel_y, -0.1, 1.0) * standing_mask * not_finished
 
-        # ============ 3. Y坐标进度奖励 ============
+        # 超速惩罚：到达终点后任何水平速度都受罚（促进停稳）
+        base_speed_xy = np.linalg.norm(base_lin_vel[:, :2], axis=-1)
+        reward -= has_finished.astype(np.float32) * base_speed_xy * OVERSPEED_PENALTY
+
+        # ============ 3. Y坐标进度奖励 ============ — 到达终点后关闭
         last_y = info.get("last_y", robot_y.copy())
         delta_y = robot_y - last_y
-        reward += PROGRESS_SCALE * np.clip(delta_y, -0.05, 0.3) * standing_mask
+        reward += PROGRESS_SCALE * np.clip(delta_y, -0.05, 0.3) * standing_mask * not_finished
         info["last_y"] = robot_y.copy()
 
-        # ============ 4. 路径点距离缩减奖励 ============
+        # ============ 4. 路径点距离缩减奖励 ============ — 到达终点后关闭
         # 使用当前路径点距离（而非终点距离）提供密集引导
         dist_to_waypoint = info.get("distance_to_waypoint",
                                     np.linalg.norm(robot_xy - info["finish_zone_center"], axis=-1))
         last_dist_wp = info.get("last_distance_to_waypoint", dist_to_waypoint.copy())
         dist_reduction_wp = last_dist_wp - dist_to_waypoint
-        reward += np.clip(dist_reduction_wp * WAYPOINT_DIST_REDUCTION_SCALE, -0.05, 0.5)
+        reward += np.clip(dist_reduction_wp * WAYPOINT_DIST_REDUCTION_SCALE, -0.05, 0.5) * not_finished
         info["last_distance_to_waypoint"] = dist_to_waypoint.copy()
 
         # 路径点推进一次性奖励
         wp_just_reached = info.get("waypoint_just_reached", np.zeros(n_envs, dtype=bool))
         reward += wp_just_reached.astype(np.float32) * WAYPOINT_ADVANCE_BONUS
 
-        # 终点距离缩减（保留，为远距离终点提供宏观梯度）
+        # 终点距离缩减 — 到达终点后关闭
         finish_zone_center = info["finish_zone_center"]
         distance_to_finish = np.linalg.norm(robot_xy - finish_zone_center, axis=-1)
         last_dist = info.get("last_distance_to_finish", distance_to_finish.copy())
         dist_reduction = last_dist - distance_to_finish
-        reward += np.clip(dist_reduction * 0.3, -0.03, 0.2)
+        reward += np.clip(dist_reduction * 0.3, -0.03, 0.2) * not_finished
         info["last_distance_to_finish"] = distance_to_finish.copy()
 
         # ============ 4b. 朝向对齐奖励（密集） ============
@@ -1197,11 +1207,20 @@ class VBotSection012Env(NpEnv):
             height_too_low | vel_overflow | vel_nan_inf
         ) & ~in_grace
 
-        terminated = physical_termination
+        # 庆祝期间放宽终止条件：已到达终点且正在庆祝时，
+        # 仅保留越界和关节异常终止，忽略摔倒/姿态/高度判定
+        finish_reached = info.get("finish_reached", np.zeros(n_envs, dtype=bool))
+        celebration_completed = info.get("celebration_completed", np.zeros(n_envs, dtype=bool))
+        in_celebration = finish_reached & ~celebration_completed
+        celebration_termination = (
+            out_of_bounds | vel_overflow | vel_nan_inf
+        ) & ~in_grace
+
+        terminated = np.where(in_celebration, celebration_termination, physical_termination)
 
         # 物理终止施加重罚
         info["termination_penalty"] = np.where(
-            physical_termination, TERMINATION_PENALTY, 0.0
+            terminated, TERMINATION_PENALTY, 0.0
         ).astype(np.float32)
 
         return terminated
@@ -1221,7 +1240,7 @@ class VBotSection012Env(NpEnv):
             if waypoints is not None:
                 wp = waypoints[env_idx, waypoint_idx[env_idx]]
             else:
-                wp = FINISH_ZONE_CENTER
+                wp = _FINISH_BRIDGE
             all_dof_pos[env_idx, self._target_marker_dof_start:self._target_marker_dof_end] = [
                 float(wp[0]), float(wp[1]), 0.0
             ]
@@ -1394,13 +1413,8 @@ class VBotSection012Env(NpEnv):
         # ===== 构建初始信息 =====
         root_pos, root_quat, root_vel = self._extract_root_state(data)
 
-        # 终点X轴随机化
-        finish_zone_centers = np.tile(FINISH_ZONE_CENTER, (num_envs, 1))
-        finish_zone_centers[:, 0] = np.random.uniform(
-            FINISH_ZONE_X_RANGE[0], FINISH_ZONE_X_RANGE[1], size=num_envs
-        ).astype(np.float32)
-
-        # 路径点序列初始化：中间检查点 + 终点
+        # 路径点序列初始化：中间检查点 + 终点（按路线分配）
+        finish_zone_centers = np.zeros((num_envs, 2), dtype=np.float32)
         waypoints_all = np.zeros((num_envs, NUM_WAYPOINTS_TOTAL, 2), dtype=np.float32)
         route_choices = np.full(num_envs, -1, dtype=np.int32)
         route_locked_arr = np.ones(num_envs, dtype=bool)
@@ -1411,14 +1425,16 @@ class VBotSection012Env(NpEnv):
             dist_to_riverbed = abs(spawn_x - RIVERBED_X_CENTER)
             choose_bridge = dist_to_bridge <= dist_to_riverbed
             route_choices[i] = 0 if choose_bridge else 1
-            # WP0: 中间检查点
             if choose_bridge:
-                # 吊桥路线：固定为吊桥中心
+                # 吊桥路线：中间检查点和终点都固定为吊桥中心X
                 waypoints_all[i, 0] = _WAYPOINT_MID.copy()
+                finish_zone_centers[i] = _FINISH_BRIDGE.copy()
             else:
-                # 河床路线：以河床中心 X ± 0.3m 随机偏移
-                rand_offset = np.random.uniform(-WAYPOINT_MID_X_RANDOM, WAYPOINT_MID_X_RANDOM)
-                waypoints_all[i, 0] = [RIVERBED_X_CENTER + rand_offset, _WAYPOINT_MID[1]]
+                # 河床路线：中间检查点和终点以河床中心X ± 0.3m 随机偏移
+                mid_offset = np.random.uniform(-WAYPOINT_MID_X_RANDOM, WAYPOINT_MID_X_RANDOM)
+                waypoints_all[i, 0] = [RIVERBED_X_CENTER + mid_offset, _WAYPOINT_MID[1]]
+                fin_offset = np.random.uniform(-FINISH_X_RANDOM, FINISH_X_RANDOM)
+                finish_zone_centers[i] = [RIVERBED_X_CENTER + fin_offset, FINISH_ZONE_Y]
             # WP1: 终点
             waypoints_all[i, 1] = finish_zone_centers[i]
 
