@@ -1,102 +1,90 @@
-**Language**: [English](README.md) | [简体中文](README.zh-CN.md)
+# 🏆 谋先飞机器人比赛（VBot Competition）项目展示
 
-# MotrixLab
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
+![RL](https://img.shields.io/badge/RL-SKRL-FF6F00)
+![Simulation](https://img.shields.io/badge/Simulation-MotrixSim-2E8B57)
+![Status](https://img.shields.io/badge/Portfolio-Ready-success)
 
-![GitHub License](https://img.shields.io/github/license/Motphys/MotrixLab)
-![Python Version](https://img.shields.io/badge/python-3.10-blue)
+> 本仓库用于展示我在 **谋先飞机器人比赛（VBot Competition）** 中的强化学习算法与工程实践成果。  
+> 项目基于 **MotrixSim** 仿真平台与 **SKRL** 训练框架，聚焦四足机器人导航任务。
 
-`MotrixLab` is a reinforcement learning framework based on the [MotrixSim](https://github.com/Motphys/motrixsim-docs) simulation engine, designed specifically for robot simulation and training. This project provides a complete reinforcement learning development platform that integrates multiple simulation environments and training frameworks.
+---
 
-## Project Overview
+## 🌟 项目亮点与个人贡献（Project Highlights & Personal Contributions）
 
-The project is divided into two core components:
+- **算法设计与优化（Algorithm Design）**
+  - 面向比赛任务设计与迭代强化学习策略（如 PPO 训练流程优化）。
+  - 通过奖励函数与训练流程调优，提升策略稳定性与收敛效率。
+  - 最终结果：**[在此处填写性能提升指标]**。
 
--   **motrix_envs**: Various RL simulation environments built on MotrixSim, defining observation, action, and reward. Framework-agnostic and currently supports MotrixSim's CPU backend
--   **motrix_rl**: Integrates RL frameworks and uses various environment parameters from motrix_envs for training. Currently supports SKRL framework's PPO algorithm
+- **自定义强化学习环境（Custom RL Environments）**
+  - 在比赛场景中完成导航任务环境的定制与扩展。
+  - 面向赛道目标、障碍与阶段任务进行环境配置和训练适配。
 
-> Documentation: https://motrixlab.readthedocs.io
+- **竞赛成果（Competition Result）**
+  - 比赛名次/奖项：**[在此处填写您的具体名次]**。
+  - 关键成绩说明：**[在此处填写关键结果，如完成率、稳定性、收敛轮次等]**。
 
-## Key Features
+---
 
--   **Unified Interface**: Provides a concise and unified reinforcement learning training and evaluation interface
--   **Multi-backend Support**: Supports JAX and PyTorch training backends, with flexible selection based on hardware environment
--   **Rich Environments**: Includes various robot simulation environments such as basic control, locomotion, and manipulation tasks
--   **High-performance Simulation**: Built on MotrixSim's high-performance physics simulation engine
--   **Visual Training**: Supports real-time rendering and training process visualization
+## 🛠 技术栈（Tech Stack）
 
-## 🚀 Quick Start
+- **Python**
+- **SKRL**（强化学习训练框架）
+- **MotrixSim**（机器人仿真平台）
 
-> The following examples use the Python project management tool: [UV](https://docs.astral.sh/uv/)
->
-> Before starting, please [install](https://docs.astral.sh/uv/getting-started/installation/) this tool.
+---
 
-### Clone Repository
+## 🚀 环境配置与运行（Setup and Run）
+
+### 1) 克隆仓库
 
 ```bash
-git clone https://github.com/Motphys/MotrixLab
-
-cd MotrixLab
-
+git clone https://github.com/Logic-TARS/vbot-competition.git
+cd vbot-competition
 git lfs pull
 ```
 
-### Install Dependencies
+### 2) 安装依赖
 
-Install all dependencies:
-
-```bash
-uv sync --all-packages --all-extras
-```
-
-SKRL framework supports JAX(Flax) or PyTorch as training backends. You can also choose to install only one training backend based on your hardware environment:
-
-Install JAX as training backend (Linux only):
-
-```bash
-uv sync --all-packages --extra skrl-jax
-```
-
-Install PyTorch as training backend:
+> 本项目使用 `uv` 进行依赖管理。
 
 ```bash
 uv sync --all-packages --extra skrl-torch
+# 或者使用 JAX 后端：
+# uv sync --all-packages --extra skrl-jax
 ```
 
-## 🎯 Usage Guide
-
-### Environment Visualization
-
-View environments without executing training:
+### 3) 查看比赛环境（可视化）
 
 ```bash
-uv run scripts/view.py --env cartpole
+uv run scripts/view.py --env vbot_navigation_section001
 ```
 
-### Model Training
+### 4) 训练模型
 
 ```bash
-uv run scripts/train.py --env cartpole
+uv run scripts/train.py --env vbot_navigation_section001
+uv run tensorboard --logdir runs/
 ```
 
-Training results are saved in the `runs/{env-name}/` directory.
-
-View training data through TensorBoard:
+### 5) 推理/回放
 
 ```bash
-uv run tensorboard --logdir runs/{env-name}
+uv run scripts/play.py --env vbot_navigation_section001
 ```
 
-### Model Inference
+---
 
-```bash
-uv run scripts/play.py --env cartpole
-```
+## 📁 仓库整理说明
 
-For more usage methods, please refer to the [User Documentation](https://motrixlab.readthedocs.io)
+- 比赛文档已统一归档至：`docs/competition/`
+- 训练日志已统一归档至：`logs/`
+- 历史压缩包已归档至：`archives/`
 
-## 📬 Contact
+---
 
-Have questions or suggestions? Feel free to contact us through:
+## 👤 作者信息（可按需补充）
 
--   GitHub Issues: [Submit Issues](https://github.com/Motphys/MotrixLab/issues)
--   Discussions: [Join Discussion](https://github.com/Motphys/MotrixLab/discussions)
+- **GitHub**: [Logic-TARS](https://github.com/Logic-TARS)
+- **Email / LinkedIn / 个人主页**: [在此处填写您的联系方式]

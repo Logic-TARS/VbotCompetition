@@ -1,7 +1,10 @@
 __pycache__
 runs
 .pdm-python
-logs
+logs/*
+!logs/train_multispawn.log
+!logs/train_multispawn2.log
+!logs/train_v3.log
 .idea
 .claude
 .venv
@@ -9,4 +12,4 @@ node_modules
 docs/build
 docs/source/user_guide
 docs/source/index.md
-训练baseline.zip
+/训练baseline.zip
